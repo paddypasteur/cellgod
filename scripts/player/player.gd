@@ -8,6 +8,13 @@ signal hit_landed(target: Node, charge: float)
 
 enum PodState { IDLE, CHARGING, EXTENDING, HOLDING, RETRACTING }
 
+## 攻击方向的输入方案。方案未定，三种都保留，运行时在检查器里切换对比
+enum AimMode {
+    RIGHT_STICK,     ## 0 = 右摇杆/鼠标瞄准，镜头不吃右摇杆
+    MOVE_DIRECTION,  ## 1 = 朝移动输入的方向，回中时朝镜头前方
+    CAMERA_FORWARD,  ## 2 = 永远朝镜头前方（传统类魂）
+}
+
 @export_group("移动")
 ## 最大悬浮速度（米/秒）
 @export var max_speed: float = 7.0
@@ -19,7 +26,10 @@ enum PodState { IDLE, CHARGING, EXTENDING, HOLDING, RETRACTING }
 @export_range(0.0, 2.0) var vertical_speed_scale: float = 0.8
 
 @export_group("瞄准")
-## 右摇杆（或鼠标偏移）推满时，攻击方向偏离"水平前方"多少度。
+## 攻击方向由什么决定。运行中可在远程检查器里改，下一帧生效。
+## 选 0 时右摇杆归瞄准；选 1/2 时右摇杆归镜头
+@export var aim_mode: AimMode = AimMode.MOVE_DIRECTION
+## （模式 0）右摇杆（或鼠标偏移）推满时，攻击方向偏离"水平前方"多少度。
 ## 90 = 推满指向正侧/正上/正下；180 = 推满指向正后方。
 ## 这是把二维摇杆映射到三维方向的临时方案，方案本身未定。
 @export_range(30.0, 180.0) var aim_max_tilt_deg: float = 120.0
@@ -137,6 +147,27 @@ func _physics_process(delta: float) -> void:
 # ---------------------------------------------------------------- 瞄准
 
 func _update_aim() -> void:
+    var raw_dir: Vector3
+    match aim_mode:
+        AimMode.RIGHT_STICK:
+            raw_dir = _right_stick_aim()
+        AimMode.MOVE_DIRECTION:
+            raw_dir = _move_direction_aim()
+        _:
+            raw_dir = _camera_flat_forward()
+    _aim_dir = _apply_aim_assist(raw_dir, body_radius + _current_reach_length())
+
+
+## 模式 1：上升/下降键也算移动输入，所以能朝斜上、正下方出伪足
+func _move_direction_aim() -> Vector3:
+    var dir: Vector3 = _move_input_world(1.0)
+    if dir.length_squared() < 0.0001:
+        return _camera_flat_forward()
+    return dir.normalized()
+
+
+## 模式 0
+func _right_stick_aim() -> Vector3:
     var stick: Vector2 = Input.get_vector(&"aim_left", &"aim_right", &"aim_down", &"aim_up", aim_stick_deadzone)
     if stick != Vector2.ZERO:
         _aim_from_mouse = false
@@ -147,9 +178,7 @@ func _update_aim() -> void:
         stick = Vector2.ZERO
     else:
         stick = _last_stick
-
-    var raw_dir: Vector3 = _stick_to_world(stick)
-    _aim_dir = _apply_aim_assist(raw_dir, body_radius + _current_reach_length())
+    return _stick_to_world(stick)
 
 
 ## 把鼠标相对主角屏幕位置的偏移换算成"虚拟摇杆"，这样键鼠和手柄共用同一套映射
@@ -327,19 +356,23 @@ func _on_hit(hit: Dictionary) -> void:
 # ---------------------------------------------------------------- 移动
 
 func _update_movement(delta: float) -> void:
-    var fwd: Vector3 = _camera_flat_forward()
-    var right: Vector3 = fwd.cross(Vector3.UP).normalized()
-    var planar: Vector2 = Input.get_vector(&"move_left", &"move_right", &"move_forward", &"move_back")
-    var vertical: float = Input.get_axis(&"move_down", &"move_up")
-
-    var wish: Vector3 = right * planar.x - fwd * planar.y + Vector3.UP * vertical * vertical_speed_scale
-    wish = wish.limit_length(1.0)
+    var wish: Vector3 = _move_input_world(vertical_speed_scale).limit_length(1.0)
     var target_velocity: Vector3 = wish * max_speed * _move_scale()
     var rate: float = acceleration if wish.length_squared() > 0.0001 else deceleration
     velocity = velocity.lerp(target_velocity, 1.0 - exp(-rate * delta))
 
     move_and_slide()
     _apply_arena_bounds()
+
+
+## 移动输入换算到世界空间（相对镜头水平朝向），未归一化。
+## 移动和模式 1 的瞄准共用这一份换算，保证"往哪走"和"往哪打"完全一致
+func _move_input_world(vertical_scale: float) -> Vector3:
+    var fwd: Vector3 = _camera_flat_forward()
+    var right: Vector3 = fwd.cross(Vector3.UP).normalized()
+    var planar: Vector2 = Input.get_vector(&"move_left", &"move_right", &"move_forward", &"move_back")
+    var vertical: float = Input.get_axis(&"move_down", &"move_up")
+    return right * planar.x - fwd * planar.y + Vector3.UP * vertical * vertical_scale
 
 
 func _move_scale() -> float:
@@ -418,8 +451,13 @@ static func _basis_y_to(dir: Vector3) -> Basis:
 func get_debug_text() -> String:
     var state_name: String = PodState.keys()[_pod_state]
     var charge: float = _current_charge() if _pod_state == PodState.CHARGING else _attack_charge
-    return "瞄准输入: %s\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
-        "鼠标" if _aim_from_mouse else "摇杆",
+    var source: String = ""
+    if aim_mode == AimMode.RIGHT_STICK:
+        source = "（鼠标）" if _aim_from_mouse else "（摇杆）"
+    return "瞄准模式: %d %s%s\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
+        aim_mode,
+        AimMode.keys()[aim_mode],
+        source,
         state_name,
         charge,
         _pod_length,

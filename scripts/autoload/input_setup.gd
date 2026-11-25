@@ -28,6 +28,12 @@ func _enter_tree() -> void:
     _add_action(&"aim_up", [_joy_axis(JOY_AXIS_RIGHT_Y, -1.0)])
     _add_action(&"aim_down", [_joy_axis(JOY_AXIS_RIGHT_Y, 1.0)])
 
+    # 和 aim_* 绑在同一根右摇杆上：主角瞄准模式决定由谁来读
+    _add_action(&"camera_left", [_joy_axis(JOY_AXIS_RIGHT_X, -1.0)])
+    _add_action(&"camera_right", [_joy_axis(JOY_AXIS_RIGHT_X, 1.0)])
+    _add_action(&"camera_up", [_joy_axis(JOY_AXIS_RIGHT_Y, -1.0)])
+    _add_action(&"camera_down", [_joy_axis(JOY_AXIS_RIGHT_Y, 1.0)])
+
     _add_action(&"pseudopod", [_mouse(MOUSE_BUTTON_LEFT), _joy_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)])
 
 
