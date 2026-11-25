@@ -36,23 +36,24 @@ enum AttackShape {
 ## 朝向最多能抬头/低头多少度。上升/下降输入会让正面倾斜，0 = 正面永远水平
 @export_range(0.0, 89.0) var facing_max_pitch_deg: float = 60.0
 
-@export_group("上下方向（三个开关可任意组合）")
+@export_group("索敌")
+## 只有投影到屏幕上、离屏幕中心不超过"屏幕高度 × 此比例"的敌人才会被选中。
+## 选中后攻击直接打向它，身体也转过去：镜头对准谁就打谁
+@export_range(0.0, 1.0) var target_screen_radius: float = 0.3
+## 伪足射程之外再多给多少米的余量（目标本身有体积，球心稍远一点也打得到）
+@export var target_reach_slack: float = 1.0
+## 选中标记悬在目标中心上方多高
+@export var target_marker_height: float = 1.0
+
+@export_group("上下方向（没有选中目标时）")
 ## 开关 1：攻击的上下角度跟随镜头俯仰。右摇杆往上看，伪足就往上打
 @export var vertical_from_camera: bool = true
 ## 镜头每偏离默认俯仰 1°，攻击抬高/压低多少度
 @export_range(0.0, 2.0) var camera_pitch_follow_ratio: float = 1.0
 ## 镜头俯仰在默认值附近多少度内不影响攻击，免得轻碰右摇杆攻击就歪
 @export_range(0.0, 30.0) var camera_pitch_deadzone_deg: float = 5.0
-## 开关 2：不对称吸附。水平窄（保住"朝正面打"），上下宽（高低交给游戏找）。
-## 关闭时退回下面的对称吸附 aim_assist_angle_deg
-@export var vertical_assist_enabled: bool = true
-## 不对称吸附的水平容差（度）
-@export_range(0.0, 45.0) var assist_horizontal_deg: float = 12.0
-## 不对称吸附的上下容差（度）
-@export_range(0.0, 89.0) var assist_vertical_deg: float = 60.0
-## 开关 2 关闭时使用的对称吸附角（度）。0 = 完全不吸附
-@export_range(0.0, 45.0) var aim_assist_angle_deg: float = 12.0
-## 开关 3：方向攻击。按住上升/下降键出招 = 上挑/下砸（丝之歌式），优先于开关 1
+## 开关 3：方向攻击。按住上升/下降键出招 = 上挑/下砸（丝之歌式）。
+## 优先级最高：按着方向时不自动选目标，玩家明确的输入压过自动索敌
 @export var directional_attacks: bool = true
 ## 上挑/下砸的角度（度）。90 = 正上/正下
 @export_range(0.0, 90.0) var directional_attack_pitch_deg: float = 70.0
@@ -135,8 +136,10 @@ var _charge_time: float = 0.0
 var _hold_timer: float = 0.0
 var _buffer_timer: float = 0.0
 
-## 当前瞄准方向（已含吸附），世界空间单位向量
+## 当前瞄准方向（已含索敌），世界空间单位向量
 var _aim_dir: Vector3 = Vector3.FORWARD
+## 当前选中的目标，没有则为 null
+var _target: Node3D = null
 
 ## 身体正面。存成偏航+俯仰两个角而不是向量，
 ## 这样转身用 rotate_toward 就不会遇到"正好转 180°时方向不确定"的问题
@@ -175,6 +178,7 @@ var _pod_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.ne
 @onready var _reach_preview: MeshInstance3D = $ReachPreview
 @onready var _facing_pivot: Node3D = $Facing
 @onready var _swing_preview: MeshInstance3D = $SwingPreview
+@onready var _target_marker: MeshInstance3D = $TargetMarker
 
 
 func _ready() -> void:
@@ -249,23 +253,60 @@ func _facing_basis() -> Basis:
 
 # ---------------------------------------------------------------- 瞄准
 
-## 水平永远是身体正面，上下由三个开关按优先级决定：
-## 方向攻击（按着升降键时）> 身体俯仰 + 镜头俯仰偏移；最后统一做吸附
+## 优先级：方向攻击（按着升降键）> 屏幕中心索敌 > 身体正面（俯仰叠加镜头偏移）
 func _update_aim() -> void:
-    var pitch: float = _facing_pitch
     var vertical: float = Input.get_axis(&"move_down", &"move_up")
-    if directional_attacks and absf(vertical) > 0.5:
+    var directional: bool = directional_attacks and absf(vertical) > 0.5
+
+    _target = null
+    if not directional:
+        _target = _find_screen_target(body_radius + _current_reach_length())
+    if _target != null:
+        _aim_dir = (_target.global_position - global_position).normalized()
+        return
+
+    var pitch: float = _facing_pitch
+    if directional:
         pitch = signf(vertical) * deg_to_rad(directional_attack_pitch_deg)
     elif vertical_from_camera:
         pitch += _camera_pitch_offset()
     pitch = clampf(pitch, deg_to_rad(-89.0), deg_to_rad(89.0))
+    _aim_dir = (Basis(Vector3.UP, _facing_yaw) * Basis(Vector3.RIGHT, pitch)) * Vector3.FORWARD
 
-    var dir: Vector3 = (Basis(Vector3.UP, _facing_yaw) * Basis(Vector3.RIGHT, pitch)) * Vector3.FORWARD
-    var reach: float = body_radius + _current_reach_length()
-    if vertical_assist_enabled:
-        _aim_dir = _apply_vertical_assist(dir, _facing_yaw, pitch, reach)
-    else:
-        _aim_dir = _apply_aim_assist(dir, reach)
+
+## 选投影离屏幕中心最近、且伪足够得着的目标。
+## 按屏幕距离而不是按身体朝向挑：玩家用镜头"看"谁，就是想打谁
+func _find_screen_target(reach: float) -> Node3D:
+    var cam: Camera3D = get_viewport().get_camera_3d()
+    if cam == null:
+        return null
+    var screen: Vector2 = get_viewport().get_visible_rect().size
+    var center: Vector2 = screen * 0.5
+    var best_px: float = screen.y * target_screen_radius
+    var max_dist: float = reach + pod_tip_radius + target_reach_slack
+    var best: Node3D = null
+    for node: Node in get_tree().get_nodes_in_group(&"target"):
+        var t := node as Node3D
+        if t == null:
+            continue
+        var dist: float = t.global_position.distance_to(global_position)
+        if dist < 0.001 or dist > max_dist:
+            continue
+        if cam.is_position_behind(t.global_position):
+            continue
+        var px: float = cam.unproject_position(t.global_position).distance_to(center)
+        if px < best_px:
+            best_px = px
+            best = t
+    return best
+
+
+## 有目标时身体直接转向攻击方向，让"正面"和"打向哪"保持一致，否则小方块指着别处会误导
+func _face_toward(dir: Vector3) -> void:
+    var flat_len: float = Vector2(dir.x, dir.z).length()
+    if flat_len > 0.0001:
+        _facing_yaw = atan2(-dir.x, -dir.z)
+    _facing_pitch = _clamp_facing_pitch(atan2(dir.y, flat_len))
 
 
 ## 镜头俯仰相对"默认俯仰"的偏移。以默认俯仰而不是水平为零点，
@@ -283,60 +324,6 @@ func _camera_pitch_offset() -> float:
     var deadzone: float = deg_to_rad(camera_pitch_deadzone_deg)
     offset = signf(offset) * maxf(absf(offset) - deadzone, 0.0)
     return offset * camera_pitch_follow_ratio
-
-
-## 水平和上下分开判断容差，取两个方向偏差（各自按容差归一化）之和最小的目标
-func _apply_vertical_assist(dir: Vector3, yaw: float, pitch: float, reach: float) -> Vector3:
-    var h_limit: float = deg_to_rad(assist_horizontal_deg)
-    var v_limit: float = deg_to_rad(assist_vertical_deg)
-    if h_limit <= 0.0 or v_limit <= 0.0:
-        return dir
-    var max_dist: float = reach + pod_tip_radius + 1.0
-    var best_dir: Vector3 = dir
-    var best_score: float = INF
-    for node: Node in get_tree().get_nodes_in_group(&"target"):
-        var t := node as Node3D
-        if t == null:
-            continue
-        var to: Vector3 = t.global_position - global_position
-        var dist: float = to.length()
-        if dist < 0.001 or dist > max_dist:
-            continue
-        var flat_len: float = Vector2(to.x, to.z).length()
-        var t_pitch: float = atan2(to.y, flat_len)
-        # 乘 cos(俯仰)：目标越接近正上/正下，水平角差在空间上越不重要，
-        # 不然头顶正上方的目标会因为偏航角算不准而永远吸不到
-        var d_yaw: float = absf(angle_difference(yaw, atan2(-to.x, -to.z))) * cos(t_pitch)
-        var d_pitch: float = absf(t_pitch - pitch)
-        if d_yaw > h_limit or d_pitch > v_limit:
-            continue
-        var score: float = d_yaw / h_limit + d_pitch / v_limit
-        if score < best_score:
-            best_score = score
-            best_dir = to / dist
-    return best_dir
-
-
-func _apply_aim_assist(dir: Vector3, reach: float) -> Vector3:
-    if aim_assist_angle_deg <= 0.0:
-        return dir
-    var best_dir: Vector3 = dir
-    var best_angle: float = deg_to_rad(aim_assist_angle_deg)
-    # 多留一点余量，目标本身有体积，球心稍远一点也打得到
-    var max_dist: float = reach + pod_tip_radius + 1.0
-    for node: Node in get_tree().get_nodes_in_group(&"target"):
-        var t := node as Node3D
-        if t == null:
-            continue
-        var to: Vector3 = t.global_position - global_position
-        var dist: float = to.length()
-        if dist < 0.001 or dist > max_dist:
-            continue
-        var angle: float = dir.angle_to(to / dist)
-        if angle < best_angle:
-            best_angle = angle
-            best_dir = to / dist
-    return best_dir
 
 
 func _camera_flat_forward() -> Vector3:
@@ -365,9 +352,13 @@ func _update_pseudopod(delta: float) -> void:
                     # 立刻刷新，否则这一帧的鼓包和瞄准点还指着旧方向
                     _update_aim()
                 _pod_state = PodState.CHARGING
+                if _target != null:
+                    _face_toward(_aim_dir)
 
         PodState.CHARGING:
             _charge_time += delta
+            if _target != null:
+                _face_toward(_aim_dir)
             # 缓冲触发时按键可能早就松开了，那就等同于一次轻点
             if not Input.is_action_pressed(&"pseudopod"):
                 _release()
@@ -419,7 +410,7 @@ func _current_charge() -> float:
     return clampf((_charge_time - tap_threshold) / span, 0.0, 1.0)
 
 
-## 当前状态下伪足"能伸到"的长度，用于吸附范围和预告线
+## 当前状态下伪足"能伸到"的长度，用于索敌范围和预告线
 func _current_reach_length() -> float:
     match _pod_state:
         PodState.CHARGING:
@@ -434,6 +425,8 @@ func _release() -> void:
     _attack_charge = _current_charge()
     _target_length = lerpf(pod_min_length, pod_max_length, _attack_charge)
     _attack_dir = _aim_dir
+    if _target != null:
+        _face_toward(_attack_dir)
     _pod_length = 0.0
     _attack_is_swing = attack_shape == AttackShape.SWING
     if _attack_is_swing:
@@ -630,6 +623,11 @@ func _update_visuals() -> void:
     if _aim_marker.visible:
         _aim_marker.position = _aim_dir * (body_radius + 0.35)
 
+    # 标记是 top_level，直接用世界坐标挂在目标头顶
+    _target_marker.visible = idle_or_charging and _target != null
+    if _target_marker.visible:
+        _target_marker.global_position = _target.global_position + Vector3.UP * target_marker_height
+
     var charging: bool = _pod_state == PodState.CHARGING
     var swing_selected: bool = attack_shape == AttackShape.SWING
 
@@ -710,10 +708,10 @@ static func _basis_y_to(dir: Vector3) -> Basis:
 func get_debug_text() -> String:
     var state_name: String = PodState.keys()[_pod_state]
     var charge: float = _current_charge() if _pod_state == PodState.CHARGING else _attack_charge
-    return "形态: %s   上下: [%s镜头] [%s吸附] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
+    return "形态: %s   目标: %s   上下: [%s镜头] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
         "挥扫" if attack_shape == AttackShape.SWING else "直刺",
+        str(_target.name) if _target != null else "无",
         "√" if vertical_from_camera else "×",
-        "√" if vertical_assist_enabled else "×",
         "√" if directional_attacks else "×",
         rad_to_deg(asin(clampf(_aim_dir.y, -1.0, 1.0))),
         state_name,
