@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3 uid="uid://dit8qucvchkmj"]
+[gd_scene load_steps=15 format=3 uid="uid://dit8qucvchkmj"]
 
 [ext_resource type="Script" uid="uid://dxem7n3briblx" path="res://scripts/arena/arena.gd" id="1_arena"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
@@ -8,7 +8,7 @@
 [ext_resource type="Script" uid="uid://bdoq8fiern376" path="res://scripts/ui/crosshair.gd" id="6_crosshair"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="7_enemy"]
 [ext_resource type="Script" uid="uid://cpmi0c5jtvhbt" path="res://scripts/ui/health_bar.gd" id="8_health"]
-[ext_resource type="Script" path="res://scripts/debug/playtest_logger.gd" id="9_logger"]
+[ext_resource type="Script" uid="uid://ba7wrcgih6f5j" path="res://scripts/debug/playtest_logger.gd" id="9_logger"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 1

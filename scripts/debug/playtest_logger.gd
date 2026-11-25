@@ -6,7 +6,8 @@ extends Node
 ## 每行一个事件：
 ##   dodge     玩家闪避；elev_deg = 闪避方向的仰角（正 = 往上）
 ##   saved     一次攻击被闪避无敌时间躲掉
-##   hurt      玩家被打中；rel_y = 打中他的敌人相对玩家的高度差
+##   hurt      玩家被打中；rel_y = 打中他的敌人**起手时**相对玩家的高度差
+##             （不能用命中那一刻的高度：冲刺已经扑到玩家身边，永远接近 0）
 ##   windup    敌人开始起手；on_screen = 起手那一刻是否在镜头视野内
 ##   sample    每 0.5 秒记一次玩家位置，用来算上下移动的幅度
 
@@ -19,6 +20,8 @@ var _file: FileAccess = null
 var _time: float = 0.0
 var _sample_timer: float = 0.0
 var _threatening: Dictionary = {}
+## 每只敌人最近一次起手时的相对高度
+var _windup_rel_y: Dictionary = {}
 var _last_health: float = -1.0
 
 ## 给调试面板显示的计数
@@ -69,7 +72,9 @@ func _physics_process(delta: float) -> void:
         var now: bool = e.is_threatening()
         if now and not _threatening.get(e, false):
             var on_screen: int = 1 if cam != null and cam.is_position_in_frustum(e.global_position) else 0
-            _write("windup", 0.0, e.global_position.y - player.global_position.y, on_screen)
+            var rel_y: float = e.global_position.y - player.global_position.y
+            _windup_rel_y[e] = rel_y
+            _write("windup", 0.0, rel_y, on_screen)
         _threatening[e] = now
 
 
@@ -93,11 +98,15 @@ func _on_dodge_saved() -> void:
 func _on_health_changed(current: float, _maximum: float) -> void:
     # 回满（被击倒重置）不算受击
     if _last_health >= 0.0 and current < _last_health:
-        _write("hurt", 0.0, _nearest_threat_rel_y(), -1)
+        var attacker: Enemy = _nearest_threat()
+        var rel_y: float = NAN
+        if attacker != null:
+            rel_y = _windup_rel_y.get(attacker, attacker.global_position.y - player.global_position.y)
+        _write("hurt", 0.0, rel_y, -1)
     _last_health = current
 
 
-func _nearest_threat_rel_y() -> float:
+func _nearest_threat() -> Enemy:
     var best: Enemy = null
     var best_dist: float = INF
     for node: Node in get_tree().get_nodes_in_group(&"enemy"):
@@ -108,6 +117,11 @@ func _nearest_threat_rel_y() -> float:
         if d < best_dist:
             best_dist = d
             best = e
+    return best
+
+
+func _nearest_threat_rel_y() -> float:
+    var best: Enemy = _nearest_threat()
     if best == null:
         return NAN
     return best.global_position.y - player.global_position.y
