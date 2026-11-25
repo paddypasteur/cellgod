@@ -54,6 +54,27 @@ enum AimMode {
 ## 朝向最多能抬头/低头多少度。上升/下降输入会让正面倾斜，0 = 正面永远水平
 @export_range(0.0, 89.0) var facing_max_pitch_deg: float = 60.0
 
+@export_group("类魂 · 上下方向（模式 4，三个开关可任意组合）")
+## 开关 1：攻击的上下角度跟随镜头俯仰。右摇杆往上看，伪足就往上打
+@export var vertical_from_camera: bool = true
+## 镜头每偏离默认俯仰 1°，攻击抬高/压低多少度
+@export_range(0.0, 2.0) var camera_pitch_follow_ratio: float = 1.0
+## 镜头俯仰在默认值附近多少度内不影响攻击，免得轻碰右摇杆攻击就歪
+@export_range(0.0, 30.0) var camera_pitch_deadzone_deg: float = 5.0
+## 开关 2：不对称吸附。水平窄（保住"朝正面打"），上下宽（高低交给游戏找）。
+## 关闭时退回上面"瞄准"分组里的对称吸附
+@export var vertical_assist_enabled: bool = true
+## 不对称吸附的水平容差（度）
+@export_range(0.0, 45.0) var assist_horizontal_deg: float = 12.0
+## 不对称吸附的上下容差（度）
+@export_range(0.0, 89.0) var assist_vertical_deg: float = 60.0
+## 开关 3：方向攻击。按住上升/下降键出招 = 上挑/下砸（丝之歌式），优先于开关 1
+@export var directional_attacks: bool = false
+## 上挑/下砸的角度（度）。90 = 正上/正下
+@export_range(0.0, 90.0) var directional_attack_pitch_deg: float = 70.0
+## 方向攻击开启时，出招期间升降键只管方向，不再让身体上下移动
+@export var directional_locks_vertical_move: bool = true
+
 @export_group("伪足 · 长度与蓄力")
 ## 轻点时伸出的长度（从膜表面算起，米）
 @export var pod_min_length: float = 1.5
@@ -166,6 +187,9 @@ func _physics_process(delta: float) -> void:
 # ---------------------------------------------------------------- 瞄准
 
 func _update_aim() -> void:
+    if aim_mode == AimMode.SOULS:
+        _aim_dir = _souls_aim()
+        return
     var raw_dir: Vector3
     match aim_mode:
         AimMode.RIGHT_STICK:
@@ -174,8 +198,6 @@ func _update_aim() -> void:
             raw_dir = _move_direction_aim()
         AimMode.CAMERA_LOOK:
             raw_dir = _camera_look_forward()
-        AimMode.SOULS:
-            raw_dir = _facing_dir()
         _:
             raw_dir = _camera_flat_forward()
     _aim_dir = _apply_aim_assist(raw_dir, body_radius + _current_reach_length())
@@ -225,6 +247,72 @@ func _facing_basis() -> Basis:
 
 func _facing_dir() -> Vector3:
     return _facing_basis() * Vector3.FORWARD
+
+
+## 模式 4 的攻击方向：水平永远是身体正面，上下由三个开关按优先级决定
+func _souls_aim() -> Vector3:
+    var pitch: float = _facing_pitch
+    var vertical: float = Input.get_axis(&"move_down", &"move_up")
+    if directional_attacks and absf(vertical) > 0.5:
+        pitch = signf(vertical) * deg_to_rad(directional_attack_pitch_deg)
+    elif vertical_from_camera:
+        pitch += _camera_pitch_offset()
+    pitch = clampf(pitch, deg_to_rad(-89.0), deg_to_rad(89.0))
+
+    var dir: Vector3 = (Basis(Vector3.UP, _facing_yaw) * Basis(Vector3.RIGHT, pitch)) * Vector3.FORWARD
+    var reach: float = body_radius + _current_reach_length()
+    if vertical_assist_enabled:
+        return _apply_vertical_assist(dir, _facing_yaw, pitch, reach)
+    return _apply_aim_assist(dir, reach)
+
+
+## 镜头俯仰相对"默认俯仰"的偏移。以默认俯仰而不是水平为零点，
+## 否则镜头本来就俯视 35°，攻击一开始就会朝下 35°
+func _camera_pitch_offset() -> float:
+    var cam: Camera3D = get_viewport().get_camera_3d()
+    if cam == null:
+        return 0.0
+    var cam_pitch: float = asin(clampf(-cam.global_basis.z.y, -1.0, 1.0))
+    var neutral: float = 0.0
+    var follow := cam as FollowCamera
+    if follow != null:
+        neutral = deg_to_rad(follow.pitch_deg)
+    var offset: float = cam_pitch - neutral
+    var deadzone: float = deg_to_rad(camera_pitch_deadzone_deg)
+    offset = signf(offset) * maxf(absf(offset) - deadzone, 0.0)
+    return offset * camera_pitch_follow_ratio
+
+
+## 水平和上下分开判断容差，取两个方向偏差（各自按容差归一化）之和最小的目标
+func _apply_vertical_assist(dir: Vector3, yaw: float, pitch: float, reach: float) -> Vector3:
+    var h_limit: float = deg_to_rad(assist_horizontal_deg)
+    var v_limit: float = deg_to_rad(assist_vertical_deg)
+    if h_limit <= 0.0 or v_limit <= 0.0:
+        return dir
+    var max_dist: float = reach + pod_tip_radius + 1.0
+    var best_dir: Vector3 = dir
+    var best_score: float = INF
+    for node: Node in get_tree().get_nodes_in_group(&"target"):
+        var t := node as Node3D
+        if t == null:
+            continue
+        var to: Vector3 = t.global_position - global_position
+        var dist: float = to.length()
+        if dist < 0.001 or dist > max_dist:
+            continue
+        var flat_len: float = Vector2(to.x, to.z).length()
+        var t_pitch: float = atan2(to.y, flat_len)
+        # 乘 cos(俯仰)：目标越接近正上/正下，水平角差在空间上越不重要，
+        # 不然头顶正上方的目标会因为偏航角算不准而永远吸不到
+        var d_yaw: float = absf(angle_difference(yaw, atan2(-to.x, -to.z))) * cos(t_pitch)
+        var d_pitch: float = absf(t_pitch - pitch)
+        if d_yaw > h_limit or d_pitch > v_limit:
+            continue
+        var score: float = d_yaw / h_limit + d_pitch / v_limit
+        if score < best_score:
+            best_score = score
+            best_dir = to / dist
+    return best_dir
 
 
 ## 模式 1：上升/下降键也算移动输入，所以能朝斜上、正下方出伪足
@@ -437,7 +525,10 @@ func _on_hit(hit: Dictionary) -> void:
 # ---------------------------------------------------------------- 移动
 
 func _update_movement(delta: float) -> void:
-    var wish: Vector3 = _move_input_world(vertical_speed_scale).limit_length(1.0)
+    var wish: Vector3 = _move_input_world(vertical_speed_scale)
+    if _vertical_move_locked():
+        wish.y = 0.0
+    wish = wish.limit_length(1.0)
     var target_velocity: Vector3 = wish * max_speed * _move_scale()
     var rate: float = acceleration if wish.length_squared() > 0.0001 else deceleration
     velocity = velocity.lerp(target_velocity, 1.0 - exp(-rate * delta))
@@ -454,6 +545,14 @@ func _move_input_world(vertical_scale: float) -> Vector3:
     var planar: Vector2 = Input.get_vector(&"move_left", &"move_right", &"move_forward", &"move_back")
     var vertical: float = Input.get_axis(&"move_down", &"move_up")
     return right * planar.x - fwd * planar.y + Vector3.UP * vertical * vertical_scale
+
+
+## 方向攻击下升降键在出招期间被借去定方向，身体不应该同时往上飘
+func _vertical_move_locked() -> bool:
+    return aim_mode == AimMode.SOULS \
+        and directional_attacks \
+        and directional_locks_vertical_move \
+        and _pod_state != PodState.IDLE
 
 
 func _move_scale() -> float:
@@ -540,6 +639,13 @@ func get_debug_text() -> String:
     var source: String = ""
     if aim_mode == AimMode.RIGHT_STICK:
         source = "（鼠标）" if _aim_from_mouse else "（摇杆）"
+    elif aim_mode == AimMode.SOULS:
+        source = "  上下:[%s镜头][%s吸附][%s方向]  攻击俯仰 %+.0f°" % [
+            "√" if vertical_from_camera else "×",
+            "√" if vertical_assist_enabled else "×",
+            "√" if directional_attacks else "×",
+            rad_to_deg(asin(clampf(_aim_dir.y, -1.0, 1.0))),
+        ]
     return "瞄准模式: %d %s%s\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
         aim_mode,
         AimMode.keys()[aim_mode],
