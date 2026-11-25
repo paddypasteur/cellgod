@@ -23,7 +23,7 @@ func _process(_delta: float) -> void:
         text += player.get_debug_text() + "\n"
     text += "命中 %d\n" % _hits
     text += _joypad_text() + "\n\n"
-    text += "手柄: 左摇杆移动  RB/LB 升/降  右摇杆 镜头(模式1/2)/瞄准(模式0)  RT 按住蓄力\n"
+    text += "手柄: 左摇杆移动  RB/LB 升/降  右摇杆 镜头(模式1/2/3)/瞄准(模式0)  RT 按住蓄力\n"
     text += "键鼠(临时): WASD 移动  空格/Shift 升/降  鼠标瞄准(仅模式0)  左键按住蓄力"
     _label.text = text
 

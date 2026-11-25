@@ -12,7 +12,8 @@ enum PodState { IDLE, CHARGING, EXTENDING, HOLDING, RETRACTING }
 enum AimMode {
     RIGHT_STICK,     ## 0 = 右摇杆/鼠标瞄准，镜头不吃右摇杆
     MOVE_DIRECTION,  ## 1 = 朝移动输入的方向，回中时朝镜头前方
-    CAMERA_FORWARD,  ## 2 = 永远朝镜头前方（传统类魂）
+    CAMERA_FORWARD,  ## 2 = 永远朝镜头水平前方（传统类魂），上下靠吸附或升降
+    CAMERA_LOOK,     ## 3 = 永远朝镜头实际朝向（含俯仰），右摇杆上下即可往上下打
 }
 
 @export_group("移动")
@@ -27,8 +28,8 @@ enum AimMode {
 
 @export_group("瞄准")
 ## 攻击方向由什么决定。运行中可在远程检查器里改，下一帧生效。
-## 选 0 时右摇杆归瞄准；选 1/2 时右摇杆归镜头
-@export var aim_mode: AimMode = AimMode.MOVE_DIRECTION
+## 选 0 时右摇杆归瞄准；选 1/2/3 时右摇杆归镜头
+@export var aim_mode: AimMode = AimMode.CAMERA_FORWARD
 ## （模式 0）右摇杆（或鼠标偏移）推满时，攻击方向偏离"水平前方"多少度。
 ## 90 = 推满指向正侧/正上/正下；180 = 推满指向正后方。
 ## 这是把二维摇杆映射到三维方向的临时方案，方案本身未定。
@@ -153,6 +154,8 @@ func _update_aim() -> void:
             raw_dir = _right_stick_aim()
         AimMode.MOVE_DIRECTION:
             raw_dir = _move_direction_aim()
+        AimMode.CAMERA_LOOK:
+            raw_dir = _camera_look_forward()
         _:
             raw_dir = _camera_flat_forward()
     _aim_dir = _apply_aim_assist(raw_dir, body_radius + _current_reach_length())
@@ -226,6 +229,14 @@ func _apply_aim_assist(dir: Vector3, reach: float) -> Vector3:
             best_angle = angle
             best_dir = to / dist
     return best_dir
+
+
+## 模式 3。镜头默认略微俯视，所以摇杆回中时伪足会稍微朝下
+func _camera_look_forward() -> Vector3:
+    var cam: Camera3D = get_viewport().get_camera_3d()
+    if cam == null:
+        return Vector3.FORWARD
+    return -cam.global_basis.z
 
 
 func _camera_flat_forward() -> Vector3:
