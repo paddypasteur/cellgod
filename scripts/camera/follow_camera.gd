@@ -10,8 +10,12 @@ extends Camera3D
 @export_group("距离与角度")
 ## 镜头到注视点的距离
 @export var distance: float = 7.0
-## 初始俯仰角。负数 = 从上往下看。手动转镜头后以实际角度为准
-@export_range(-80.0, 80.0) var pitch_deg: float = -15.0
+## 俯仰角。负数 = 从上往下看。运行中拖动会立刻覆盖右摇杆转出来的角度
+@export_range(-80.0, 80.0) var pitch_deg: float = -15.0:
+    set(value):
+        pitch_deg = value
+        # 手动控制改的是 _pitch_deg，所以检查器里的改动必须同步过去，否则运行时拖动无效
+        _pitch_deg = value
 ## 注视点比主角高多少。越大主角越靠画面下方，上方视野越多
 @export var look_height_offset: float = 0.8
 
