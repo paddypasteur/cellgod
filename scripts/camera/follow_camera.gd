@@ -1,7 +1,6 @@
 class_name FollowCamera
 extends Camera3D
-## 跟随镜头。主角瞄准模式为 0（右摇杆瞄准）时纯自动跟随，右摇杆让给攻击；
-## 其他模式下右摇杆手动转镜头，松手一段时间后恢复自动回正。
+## 跟随镜头。右摇杆手动转镜头，松手一段时间后恢复自动朝移动方向回正。
 ## 铁律：永远不 roll。所有朝向都用 look_at(..., Vector3.UP) 生成，
 ## 俯仰角也夹在 ±80° 以内，避免接近竖直时 look_at 退化。
 
@@ -72,15 +71,8 @@ func _physics_process(delta: float) -> void:
     _apply()
 
 
-func _manual_enabled() -> bool:
-    var player := target as Player
-    return player == null or player.aim_mode != Player.AimMode.RIGHT_STICK
-
-
 func _update_manual(delta: float) -> void:
     _manual_cooldown = maxf(_manual_cooldown - delta, 0.0)
-    if not _manual_enabled():
-        return
     var stick: Vector2 = Input.get_vector(&"camera_left", &"camera_right", &"camera_down", &"camera_up", stick_deadzone)
     if stick == Vector2.ZERO:
         return

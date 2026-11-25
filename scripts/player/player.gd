@@ -1,21 +1,14 @@
 class_name Player
 extends CharacterBody3D
 ## 原型主角：无定形免疫细胞。
-## 身体永远不转向，攻击方向只由瞄准输入决定，和移动方向完全无关。
-## 这就是"攻击方向与身体朝向解耦"这条机制本身。
+## 当前操作采用类魂方案：身体有正面，转向移动方向，攻击永远朝正面打；
+## 攻击的上下角度由三个可组合的开关决定（镜头俯仰 / 不对称吸附 / 方向攻击）。
+## 早期试过的另外四种瞄准方案（右摇杆瞄准、移动方向、镜头水平前方、镜头实际朝向）
+## 已删除，需要时可从 git 历史 3c64973 找回。
 
 signal hit_landed(target: Node, charge: float)
 
 enum PodState { IDLE, CHARGING, EXTENDING, HOLDING, RETRACTING }
-
-## 攻击方向的输入方案。方案未定，三种都保留，运行时在检查器里切换对比
-enum AimMode {
-    RIGHT_STICK,     ## 0 = 右摇杆/鼠标瞄准，镜头不吃右摇杆
-    MOVE_DIRECTION,  ## 1 = 朝移动输入的方向，回中时朝镜头前方
-    CAMERA_FORWARD,  ## 2 = 永远朝镜头水平前方（传统类魂），上下靠吸附或升降
-    CAMERA_LOOK,     ## 3 = 永远朝镜头实际朝向（含俯仰），右摇杆上下即可往上下打
-    SOULS,           ## 4 = 类魂：身体有正面，转向移动方向，攻击永远朝正面
-}
 
 @export_group("移动")
 ## 最大悬浮速度（米/秒）
@@ -27,24 +20,7 @@ enum AimMode {
 ## 上升/下降速度相对水平速度的比例
 @export_range(0.0, 2.0) var vertical_speed_scale: float = 0.8
 
-@export_group("瞄准")
-## 攻击方向由什么决定。运行中可在远程检查器里改，下一帧生效。
-## 选 0 时右摇杆归瞄准；选 1/2/3/4 时右摇杆归镜头
-@export var aim_mode: AimMode = AimMode.SOULS
-## （模式 0）右摇杆（或鼠标偏移）推满时，攻击方向偏离"水平前方"多少度。
-## 90 = 推满指向正侧/正上/正下；180 = 推满指向正后方。
-## 这是把二维摇杆映射到三维方向的临时方案，方案本身未定。
-@export_range(30.0, 180.0) var aim_max_tilt_deg: float = 120.0
-## 右摇杆死区
-@export_range(0.0, 0.9) var aim_stick_deadzone: float = 0.25
-## 摇杆回中后：true = 瞄准回到镜头前方；false = 保持最后一次的方向
-@export var aim_neutral_returns_forward: bool = false
-## （键鼠临时方案）鼠标离主角屏幕位置多少像素算"推满"
-@export var mouse_aim_radius_px: float = 300.0
-## 瞄准吸附：攻击方向与目标夹角小于此值时直接对准目标。0 = 关闭
-@export_range(0.0, 45.0) var aim_assist_angle_deg: float = 12.0
-
-@export_group("类魂朝向（模式 4）")
+@export_group("朝向")
 ## 待机/移动时身体转向的速度（度/秒）
 @export var turn_speed_deg: float = 720.0
 ## 蓄力期间还能慢慢修正朝向的速度（度/秒）。0 = 蓄力时完全锁死
@@ -54,7 +30,7 @@ enum AimMode {
 ## 朝向最多能抬头/低头多少度。上升/下降输入会让正面倾斜，0 = 正面永远水平
 @export_range(0.0, 89.0) var facing_max_pitch_deg: float = 60.0
 
-@export_group("类魂 · 上下方向（模式 4，三个开关可任意组合）")
+@export_group("上下方向（三个开关可任意组合）")
 ## 开关 1：攻击的上下角度跟随镜头俯仰。右摇杆往上看，伪足就往上打
 @export var vertical_from_camera: bool = true
 ## 镜头每偏离默认俯仰 1°，攻击抬高/压低多少度
@@ -62,14 +38,16 @@ enum AimMode {
 ## 镜头俯仰在默认值附近多少度内不影响攻击，免得轻碰右摇杆攻击就歪
 @export_range(0.0, 30.0) var camera_pitch_deadzone_deg: float = 5.0
 ## 开关 2：不对称吸附。水平窄（保住"朝正面打"），上下宽（高低交给游戏找）。
-## 关闭时退回上面"瞄准"分组里的对称吸附
+## 关闭时退回下面的对称吸附 aim_assist_angle_deg
 @export var vertical_assist_enabled: bool = true
 ## 不对称吸附的水平容差（度）
 @export_range(0.0, 45.0) var assist_horizontal_deg: float = 12.0
 ## 不对称吸附的上下容差（度）
 @export_range(0.0, 89.0) var assist_vertical_deg: float = 60.0
+## 开关 2 关闭时使用的对称吸附角（度）。0 = 完全不吸附
+@export_range(0.0, 45.0) var aim_assist_angle_deg: float = 12.0
 ## 开关 3：方向攻击。按住上升/下降键出招 = 上挑/下砸（丝之歌式），优先于开关 1
-@export var directional_attacks: bool = false
+@export var directional_attacks: bool = true
 ## 上挑/下砸的角度（度）。90 = 正上/正下
 @export_range(0.0, 90.0) var directional_attack_pitch_deg: float = 70.0
 ## 方向攻击开启时，出招期间升降键只管方向，不再让身体上下移动
@@ -133,13 +111,11 @@ var _buffer_timer: float = 0.0
 
 ## 当前瞄准方向（已含吸附），世界空间单位向量
 var _aim_dir: Vector3 = Vector3.FORWARD
-var _aim_from_mouse: bool = false
 
-## 身体正面（模式 4 用）。存成偏航+俯仰两个角而不是向量，
+## 身体正面。存成偏航+俯仰两个角而不是向量，
 ## 这样转身用 rotate_toward 就不会遇到"正好转 180°时方向不确定"的问题
 var _facing_yaw: float = 0.0
 var _facing_pitch: float = 0.0
-var _last_stick: Vector2 = Vector2.ZERO
 
 ## 本次攻击在松手时锁定的参数
 var _attack_dir: Vector3 = Vector3.FORWARD
@@ -170,10 +146,6 @@ func _unhandled_input(event: InputEvent) -> void:
     # 命中定格时物理帧暂停，轮询会漏掉定格期间的按键
     if event.is_action_pressed(&"pseudopod"):
         _buffer_timer = input_buffer_time
-    elif event is InputEventMouseMotion:
-        # 小幅抖动不算切换设备，免得手柄玩家碰一下鼠标瞄准就跳
-        if (event as InputEventMouseMotion).relative.length() > 2.0:
-            _aim_from_mouse = true
 
 
 func _physics_process(delta: float) -> void:
@@ -184,27 +156,10 @@ func _physics_process(delta: float) -> void:
     _update_visuals()
 
 
-# ---------------------------------------------------------------- 瞄准
+# ---------------------------------------------------------------- 朝向
 
-func _update_aim() -> void:
-    if aim_mode == AimMode.SOULS:
-        _aim_dir = _souls_aim()
-        return
-    var raw_dir: Vector3
-    match aim_mode:
-        AimMode.RIGHT_STICK:
-            raw_dir = _right_stick_aim()
-        AimMode.MOVE_DIRECTION:
-            raw_dir = _move_direction_aim()
-        AimMode.CAMERA_LOOK:
-            raw_dir = _camera_look_forward()
-        _:
-            raw_dir = _camera_flat_forward()
-    _aim_dir = _apply_aim_assist(raw_dir, body_radius + _current_reach_length())
-
-
-## 模式 4 的身体朝向。转身速度按攻击状态分档：
-## 待机快速转，蓄力慢慢修正，伪足伸出后完全锁死——出招后不能再改方向，这是类魂的核心约束
+## 转身速度按攻击状态分档：待机快速转，蓄力慢慢修正，
+## 伪足伸出后完全锁死——出招后不能再改方向，这是类魂的核心约束
 func _update_facing(delta: float) -> void:
     var turn_deg: float = 0.0
     match _pod_state:
@@ -245,12 +200,11 @@ func _facing_basis() -> Basis:
     return Basis(Vector3.UP, _facing_yaw) * Basis(Vector3.RIGHT, _facing_pitch)
 
 
-func _facing_dir() -> Vector3:
-    return _facing_basis() * Vector3.FORWARD
+# ---------------------------------------------------------------- 瞄准
 
-
-## 模式 4 的攻击方向：水平永远是身体正面，上下由三个开关按优先级决定
-func _souls_aim() -> Vector3:
+## 水平永远是身体正面，上下由三个开关按优先级决定：
+## 方向攻击（按着升降键时）> 身体俯仰 + 镜头俯仰偏移；最后统一做吸附
+func _update_aim() -> void:
     var pitch: float = _facing_pitch
     var vertical: float = Input.get_axis(&"move_down", &"move_up")
     if directional_attacks and absf(vertical) > 0.5:
@@ -262,8 +216,9 @@ func _souls_aim() -> Vector3:
     var dir: Vector3 = (Basis(Vector3.UP, _facing_yaw) * Basis(Vector3.RIGHT, pitch)) * Vector3.FORWARD
     var reach: float = body_radius + _current_reach_length()
     if vertical_assist_enabled:
-        return _apply_vertical_assist(dir, _facing_yaw, pitch, reach)
-    return _apply_aim_assist(dir, reach)
+        _aim_dir = _apply_vertical_assist(dir, _facing_yaw, pitch, reach)
+    else:
+        _aim_dir = _apply_aim_assist(dir, reach)
 
 
 ## 镜头俯仰相对"默认俯仰"的偏移。以默认俯仰而不是水平为零点，
@@ -315,54 +270,6 @@ func _apply_vertical_assist(dir: Vector3, yaw: float, pitch: float, reach: float
     return best_dir
 
 
-## 模式 1：上升/下降键也算移动输入，所以能朝斜上、正下方出伪足
-func _move_direction_aim() -> Vector3:
-    var dir: Vector3 = _move_input_world(1.0)
-    if dir.length_squared() < 0.0001:
-        return _camera_flat_forward()
-    return dir.normalized()
-
-
-## 模式 0
-func _right_stick_aim() -> Vector3:
-    var stick: Vector2 = Input.get_vector(&"aim_left", &"aim_right", &"aim_down", &"aim_up", aim_stick_deadzone)
-    if stick != Vector2.ZERO:
-        _aim_from_mouse = false
-        _last_stick = stick
-    elif _aim_from_mouse:
-        stick = _mouse_as_stick()
-    elif aim_neutral_returns_forward:
-        stick = Vector2.ZERO
-    else:
-        stick = _last_stick
-    return _stick_to_world(stick)
-
-
-## 把鼠标相对主角屏幕位置的偏移换算成"虚拟摇杆"，这样键鼠和手柄共用同一套映射
-func _mouse_as_stick() -> Vector2:
-    var cam: Camera3D = get_viewport().get_camera_3d()
-    if cam == null:
-        return Vector2.ZERO
-    var center: Vector2 = cam.unproject_position(global_position)
-    var offset: Vector2 = get_viewport().get_mouse_position() - center
-    var stick := Vector2(offset.x, -offset.y) / maxf(mouse_aim_radius_px, 1.0)
-    return stick.limit_length(1.0)
-
-
-## 摇杆偏移量决定偏离前方的角度，摇杆方向决定往哪边偏。
-## 用"镜头水平前方 + 世界上方"做参考系而不是镜头完整朝向，
-## 这样镜头俯仰变化时，回中的瞄准仍然是水平的，不会忽上忽下。
-func _stick_to_world(stick: Vector2) -> Vector3:
-    var fwd: Vector3 = _camera_flat_forward()
-    var mag: float = stick.length()
-    if mag < 0.0001:
-        return fwd
-    var right: Vector3 = fwd.cross(Vector3.UP).normalized()
-    var side: Vector3 = (right * stick.x + Vector3.UP * stick.y) / mag
-    var theta: float = deg_to_rad(aim_max_tilt_deg) * mag
-    return (fwd * cos(theta) + side * sin(theta)).normalized()
-
-
 func _apply_aim_assist(dir: Vector3, reach: float) -> Vector3:
     if aim_assist_angle_deg <= 0.0:
         return dir
@@ -383,14 +290,6 @@ func _apply_aim_assist(dir: Vector3, reach: float) -> Vector3:
             best_angle = angle
             best_dir = to / dist
     return best_dir
-
-
-## 模式 3。镜头默认略微俯视，所以摇杆回中时伪足会稍微朝下
-func _camera_look_forward() -> Vector3:
-    var cam: Camera3D = get_viewport().get_camera_3d()
-    if cam == null:
-        return Vector3.FORWARD
-    return -cam.global_basis.z
 
 
 func _camera_flat_forward() -> Vector3:
@@ -414,7 +313,7 @@ func _update_pseudopod(delta: float) -> void:
             if _buffer_timer > 0.0:
                 _buffer_timer = 0.0
                 _charge_time = 0.0
-                if aim_mode == AimMode.SOULS and snap_facing_on_attack:
+                if snap_facing_on_attack:
                     _snap_facing_to_input()
                     # 立刻刷新，否则这一帧的鼓包和瞄准点还指着旧方向
                     _update_aim()
@@ -538,7 +437,7 @@ func _update_movement(delta: float) -> void:
 
 
 ## 移动输入换算到世界空间（相对镜头水平朝向），未归一化。
-## 移动和模式 1 的瞄准共用这一份换算，保证"往哪走"和"往哪打"完全一致
+## 移动和转身共用这一份换算，保证"往哪走"和"往哪转"完全一致
 func _move_input_world(vertical_scale: float) -> Vector3:
     var fwd: Vector3 = _camera_flat_forward()
     var right: Vector3 = fwd.cross(Vector3.UP).normalized()
@@ -549,8 +448,7 @@ func _move_input_world(vertical_scale: float) -> Vector3:
 
 ## 方向攻击下升降键在出招期间被借去定方向，身体不应该同时往上飘
 func _vertical_move_locked() -> bool:
-    return aim_mode == AimMode.SOULS \
-        and directional_attacks \
+    return directional_attacks \
         and directional_locks_vertical_move \
         and _pod_state != PodState.IDLE
 
@@ -583,10 +481,7 @@ func _apply_arena_bounds() -> void:
 func _update_visuals() -> void:
     var idle_or_charging: bool = _pod_state == PodState.IDLE or _pod_state == PodState.CHARGING
 
-    # 正面标记只在类魂模式下有意义，其他模式身体没有朝向，显示出来反而误导
-    _facing_pivot.visible = aim_mode == AimMode.SOULS
-    if _facing_pivot.visible:
-        _facing_pivot.basis = _facing_basis()
+    _facing_pivot.basis = _facing_basis()
 
     _aim_marker.visible = idle_or_charging
     if _aim_marker.visible:
@@ -636,20 +531,11 @@ static func _basis_y_to(dir: Vector3) -> Basis:
 func get_debug_text() -> String:
     var state_name: String = PodState.keys()[_pod_state]
     var charge: float = _current_charge() if _pod_state == PodState.CHARGING else _attack_charge
-    var source: String = ""
-    if aim_mode == AimMode.RIGHT_STICK:
-        source = "（鼠标）" if _aim_from_mouse else "（摇杆）"
-    elif aim_mode == AimMode.SOULS:
-        source = "  上下:[%s镜头][%s吸附][%s方向]  攻击俯仰 %+.0f°" % [
-            "√" if vertical_from_camera else "×",
-            "√" if vertical_assist_enabled else "×",
-            "√" if directional_attacks else "×",
-            rad_to_deg(asin(clampf(_aim_dir.y, -1.0, 1.0))),
-        ]
-    return "瞄准模式: %d %s%s\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
-        aim_mode,
-        AimMode.keys()[aim_mode],
-        source,
+    return "上下: [%s镜头] [%s吸附] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
+        "√" if vertical_from_camera else "×",
+        "√" if vertical_assist_enabled else "×",
+        "√" if directional_attacks else "×",
+        rad_to_deg(asin(clampf(_aim_dir.y, -1.0, 1.0))),
         state_name,
         charge,
         _pod_length,

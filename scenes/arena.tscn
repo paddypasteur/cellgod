@@ -56,13 +56,13 @@ cast_shadow = 0
 mesh = SubResource("Mesh_boundary")
 
 [node name="Player" parent="." instance=ExtResource("2_player")]
-aim_mode = 2
 
 [node name="FollowCamera" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, 7)
 current = true
 script = ExtResource("4_camera")
 target = NodePath("../Player")
+pitch_deg = -35.0
 
 [node name="Dummies" type="Node3D" parent="."]
 
