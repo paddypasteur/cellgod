@@ -5,6 +5,7 @@
 [ext_resource type="PackedScene" path="res://scenes/training_dummy.tscn" id="3_dummy"]
 [ext_resource type="Script" uid="uid://cqf6g362v56av" path="res://scripts/camera/follow_camera.gd" id="4_camera"]
 [ext_resource type="Script" uid="uid://cl3gsn2gl344q" path="res://scripts/ui/debug_overlay.gd" id="5_overlay"]
+[ext_resource type="Script" path="res://scripts/ui/crosshair.gd" id="6_crosshair"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 1
@@ -99,3 +100,16 @@ offset_left = 12.0
 offset_top = 12.0
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 4
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Crosshair" type="Control" parent="HUD" node_paths=PackedStringArray("player")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("6_crosshair")
+player = NodePath("../../Player")

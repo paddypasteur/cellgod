@@ -301,6 +301,10 @@ func _find_screen_target(reach: float) -> Node3D:
     return best
 
 
+func has_target() -> bool:
+    return _target != null
+
+
 ## 有目标时身体直接转向攻击方向，让"正面"和"打向哪"保持一致，否则小方块指着别处会误导
 func _face_toward(dir: Vector3) -> void:
     var flat_len: float = Vector2(dir.x, dir.z).length()
