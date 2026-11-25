@@ -14,6 +14,7 @@ enum AimMode {
     MOVE_DIRECTION,  ## 1 = 朝移动输入的方向，回中时朝镜头前方
     CAMERA_FORWARD,  ## 2 = 永远朝镜头水平前方（传统类魂），上下靠吸附或升降
     CAMERA_LOOK,     ## 3 = 永远朝镜头实际朝向（含俯仰），右摇杆上下即可往上下打
+    SOULS,           ## 4 = 类魂：身体有正面，转向移动方向，攻击永远朝正面
 }
 
 @export_group("移动")
@@ -28,8 +29,8 @@ enum AimMode {
 
 @export_group("瞄准")
 ## 攻击方向由什么决定。运行中可在远程检查器里改，下一帧生效。
-## 选 0 时右摇杆归瞄准；选 1/2/3 时右摇杆归镜头
-@export var aim_mode: AimMode = AimMode.CAMERA_FORWARD
+## 选 0 时右摇杆归瞄准；选 1/2/3/4 时右摇杆归镜头
+@export var aim_mode: AimMode = AimMode.SOULS
 ## （模式 0）右摇杆（或鼠标偏移）推满时，攻击方向偏离"水平前方"多少度。
 ## 90 = 推满指向正侧/正上/正下；180 = 推满指向正后方。
 ## 这是把二维摇杆映射到三维方向的临时方案，方案本身未定。
@@ -42,6 +43,16 @@ enum AimMode {
 @export var mouse_aim_radius_px: float = 300.0
 ## 瞄准吸附：攻击方向与目标夹角小于此值时直接对准目标。0 = 关闭
 @export_range(0.0, 45.0) var aim_assist_angle_deg: float = 12.0
+
+@export_group("类魂朝向（模式 4）")
+## 待机/移动时身体转向的速度（度/秒）
+@export var turn_speed_deg: float = 720.0
+## 蓄力期间还能慢慢修正朝向的速度（度/秒）。0 = 蓄力时完全锁死
+@export var charge_turn_speed_deg: float = 180.0
+## 按下攻击时若推着方向，立刻转过去再出招（类魂的"按方向+攻击"）
+@export var snap_facing_on_attack: bool = true
+## 朝向最多能抬头/低头多少度。上升/下降输入会让正面倾斜，0 = 正面永远水平
+@export_range(0.0, 89.0) var facing_max_pitch_deg: float = 60.0
 
 @export_group("伪足 · 长度与蓄力")
 ## 轻点时伸出的长度（从膜表面算起，米）
@@ -102,6 +113,11 @@ var _buffer_timer: float = 0.0
 ## 当前瞄准方向（已含吸附），世界空间单位向量
 var _aim_dir: Vector3 = Vector3.FORWARD
 var _aim_from_mouse: bool = false
+
+## 身体正面（模式 4 用）。存成偏航+俯仰两个角而不是向量，
+## 这样转身用 rotate_toward 就不会遇到"正好转 180°时方向不确定"的问题
+var _facing_yaw: float = 0.0
+var _facing_pitch: float = 0.0
 var _last_stick: Vector2 = Vector2.ZERO
 
 ## 本次攻击在松手时锁定的参数
@@ -118,6 +134,7 @@ var _tip_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.ne
 @onready var _bulge_mesh: MeshInstance3D = $Bulge
 @onready var _aim_marker: MeshInstance3D = $AimMarker
 @onready var _reach_preview: MeshInstance3D = $ReachPreview
+@onready var _facing_pivot: Node3D = $Facing
 
 
 func _ready() -> void:
@@ -139,6 +156,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
+    _update_facing(delta)
     _update_aim()
     _update_pseudopod(delta)
     _update_movement(delta)
@@ -156,9 +174,57 @@ func _update_aim() -> void:
             raw_dir = _move_direction_aim()
         AimMode.CAMERA_LOOK:
             raw_dir = _camera_look_forward()
+        AimMode.SOULS:
+            raw_dir = _facing_dir()
         _:
             raw_dir = _camera_flat_forward()
     _aim_dir = _apply_aim_assist(raw_dir, body_radius + _current_reach_length())
+
+
+## 模式 4 的身体朝向。转身速度按攻击状态分档：
+## 待机快速转，蓄力慢慢修正，伪足伸出后完全锁死——出招后不能再改方向，这是类魂的核心约束
+func _update_facing(delta: float) -> void:
+    var turn_deg: float = 0.0
+    match _pod_state:
+        PodState.IDLE:
+            turn_deg = turn_speed_deg
+        PodState.CHARGING:
+            turn_deg = charge_turn_speed_deg
+    if turn_deg <= 0.0:
+        return
+    var step: float = deg_to_rad(turn_deg) * delta
+    var wish: Vector3 = _move_input_world(1.0)
+    var planar_len: float = Vector2(wish.x, wish.z).length()
+    if planar_len > 0.0001:
+        _facing_yaw = rotate_toward(_facing_yaw, atan2(-wish.x, -wish.z), step)
+    # 没有输入时俯仰慢慢回到水平，否则停下来后会一直歪着头
+    var pitch_target: float = 0.0
+    if wish.length_squared() > 0.0001:
+        pitch_target = _clamp_facing_pitch(atan2(wish.y, planar_len))
+    _facing_pitch = move_toward(_facing_pitch, pitch_target, step)
+
+
+func _snap_facing_to_input() -> void:
+    var wish: Vector3 = _move_input_world(1.0)
+    if wish.length_squared() < 0.0001:
+        return
+    var planar_len: float = Vector2(wish.x, wish.z).length()
+    if planar_len > 0.0001:
+        _facing_yaw = atan2(-wish.x, -wish.z)
+    _facing_pitch = _clamp_facing_pitch(atan2(wish.y, planar_len))
+
+
+func _clamp_facing_pitch(pitch: float) -> float:
+    var limit: float = deg_to_rad(facing_max_pitch_deg)
+    return clampf(pitch, -limit, limit)
+
+
+func _facing_basis() -> Basis:
+    return Basis(Vector3.UP, _facing_yaw) * Basis(Vector3.RIGHT, _facing_pitch)
+
+
+func _facing_dir() -> Vector3:
+    return _facing_basis() * Vector3.FORWARD
 
 
 ## 模式 1：上升/下降键也算移动输入，所以能朝斜上、正下方出伪足
@@ -260,6 +326,10 @@ func _update_pseudopod(delta: float) -> void:
             if _buffer_timer > 0.0:
                 _buffer_timer = 0.0
                 _charge_time = 0.0
+                if aim_mode == AimMode.SOULS and snap_facing_on_attack:
+                    _snap_facing_to_input()
+                    # 立刻刷新，否则这一帧的鼓包和瞄准点还指着旧方向
+                    _update_aim()
                 _pod_state = PodState.CHARGING
 
         PodState.CHARGING:
@@ -413,6 +483,11 @@ func _apply_arena_bounds() -> void:
 
 func _update_visuals() -> void:
     var idle_or_charging: bool = _pod_state == PodState.IDLE or _pod_state == PodState.CHARGING
+
+    # 正面标记只在类魂模式下有意义，其他模式身体没有朝向，显示出来反而误导
+    _facing_pivot.visible = aim_mode == AimMode.SOULS
+    if _facing_pivot.visible:
+        _facing_pivot.basis = _facing_basis()
 
     _aim_marker.visible = idle_or_charging
     if _aim_marker.visible:

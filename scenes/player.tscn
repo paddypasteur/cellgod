@@ -47,6 +47,13 @@ top_radius = 0.03
 bottom_radius = 0.03
 height = 1.0
 
+[sub_resource type="StandardMaterial3D" id="Mat_nose"]
+albedo_color = Color(0.2, 0.3, 0.35, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_nose"]
+material = SubResource("Mat_nose")
+size = Vector3(0.22, 0.22, 0.3)
+
 [node name="Player" type="CharacterBody3D"]
 collision_mask = 3
 motion_mode = 1
@@ -57,6 +64,12 @@ shape = SubResource("SphereShape3D_body")
 
 [node name="Body" type="MeshInstance3D" parent="."]
 mesh = SubResource("Mesh_body")
+
+[node name="Facing" type="Node3D" parent="."]
+
+[node name="Nose" type="MeshInstance3D" parent="Facing"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.48)
+mesh = SubResource("Mesh_nose")
 
 [node name="Pseudopod" type="MeshInstance3D" parent="."]
 visible = false
