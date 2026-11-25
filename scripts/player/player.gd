@@ -8,7 +8,13 @@ extends CharacterBody3D
 
 signal hit_landed(target: Node, charge: float)
 
-enum PodState { IDLE, CHARGING, EXTENDING, HOLDING, RETRACTING }
+enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
+
+## 攻击形态。保留直刺用于 A/B 对比
+enum AttackShape {
+    THRUST,  ## 0 = 直线前刺：从背后看伪足和视线几乎共线，难读
+    SWING,   ## 1 = 伸出后挥扫一个弧：轨迹落在身体轮廓之外，从背后看得清
+}
 
 @export_group("移动")
 ## 最大悬浮速度（米/秒）
@@ -63,6 +69,26 @@ enum PodState { IDLE, CHARGING, EXTENDING, HOLDING, RETRACTING }
 ## 按住时间短于此值就松开，算轻点（最短伪足、零蓄力）
 @export var tap_threshold: float = 0.1
 
+@export_group("伪足 · 挥扫")
+## 攻击形态。运行中切换，下一次出招生效
+@export var attack_shape: AttackShape = AttackShape.SWING
+## 轻点时挥扫的总角度（度）
+@export_range(0.0, 300.0) var swing_arc_short_deg: float = 70.0
+## 蓄满时挥扫的总角度（度）
+@export_range(0.0, 300.0) var swing_arc_long_deg: float = 150.0
+## 轻点时扫完整个弧所用的时间（秒）
+@export var swing_time_short: float = 0.08
+## 蓄满时扫完整个弧所用的时间（秒）。长伪足扫得慢 = 破绽大
+@export var swing_time_long: float = 0.25
+## 挥扫平面的倾角（度）。0 = 水平左右扫；90 = 竖直从上往下劈；45 = 斜劈；负数反向倾斜
+@export_range(-90.0, 90.0) var swing_plane_deg: float = 0.0
+## 连续出招时左右（或上下）交替挥扫
+@export var swing_alternate: bool = true
+## true = 一次挥扫打中路径上所有目标（每个只算一次）；false = 碰到第一个就停住
+@export var swing_pass_through: bool = true
+## 判定的角度步长（度）。挥得快、弧度大时防止一帧扫过头跳过目标；越小越准
+@export_range(1.0, 20.0) var swing_check_step_deg: float = 4.0
+
 @export_group("伪足 · 时序")
 ## 伸出速度（米/秒）。实际速度按蓄力在短/长之间插值：长伪足伸得慢
 @export var extend_speed_short: float = 45.0
@@ -95,7 +121,7 @@ enum PodState { IDLE, CHARGING, EXTENDING, HOLDING, RETRACTING }
 @export_group("显示")
 ## 身体半径。要和碰撞形状、身体网格保持一致
 @export var body_radius: float = 0.5
-## 蓄力时显示一条细线，预告伪足能伸多远
+## 蓄力时显示预告：直刺是一条射程细线，挥扫是一片扇形
 @export var show_reach_preview: bool = true
 ## 蓄满时膜鼓起部分沿攻击方向拉长到多少（相对身体直径）
 @export var bulge_max_stretch: float = 1.2
@@ -124,14 +150,31 @@ var _target_length: float = 0.0
 ## 当前伪足从膜表面伸出的长度
 var _pod_length: float = 0.0
 
+## 本次攻击是否挥扫（松手时锁定，出招中途切换形态不影响这一下）
+var _attack_is_swing: bool = false
+## 挥扫绕这根轴转；_attack_dir 是弧的正中，起点/终点是相对正中的角度
+var _swing_axis: Vector3 = Vector3.UP
+var _swing_start: float = 0.0
+var _swing_end: float = 0.0
+var _swing_duration: float = 0.1
+## 挥扫进度 0..1
+var _swing_t: float = 0.0
+## 下一次挥扫从哪一侧开始，+1 / -1
+var _swing_side: float = 1.0
+## 本次挥扫已经打中过的目标，避免同一个目标被一次挥扫判定多次
+var _swing_hit_ids: Array[int] = []
+
 var _tip_shape: SphereShape3D = SphereShape3D.new()
 var _tip_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
+var _pod_capsule: CapsuleShape3D = CapsuleShape3D.new()
+var _pod_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
 
 @onready var _pod_mesh: MeshInstance3D = $Pseudopod
 @onready var _bulge_mesh: MeshInstance3D = $Bulge
 @onready var _aim_marker: MeshInstance3D = $AimMarker
 @onready var _reach_preview: MeshInstance3D = $ReachPreview
 @onready var _facing_pivot: Node3D = $Facing
+@onready var _swing_preview: MeshInstance3D = $SwingPreview
 
 
 func _ready() -> void:
@@ -139,6 +182,10 @@ func _ready() -> void:
     _tip_query.collide_with_bodies = true
     _tip_query.collide_with_areas = false
     _tip_query.exclude = [get_rid()]
+    _pod_query.shape = _pod_capsule
+    _pod_query.collide_with_bodies = true
+    _pod_query.collide_with_areas = false
+    _pod_query.exclude = [get_rid()]
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -328,13 +375,30 @@ func _update_pseudopod(delta: float) -> void:
         PodState.EXTENDING:
             var speed: float = lerpf(extend_speed_short, extend_speed_long, _attack_charge)
             var next_length: float = move_toward(_pod_length, _target_length, speed * delta)
-            var hit: Dictionary = _sweep_tip(_pod_length, next_length)
-            if not hit.is_empty():
-                _on_hit(hit)
-            else:
+            if _attack_is_swing:
+                # 挥扫的伸出阶段相当于抬手，不判定；伸到位后才开始扫
                 _pod_length = next_length
                 if _pod_length >= _target_length:
-                    _enter_hold()
+                    _pod_state = PodState.SWEEPING
+                    # 先检查起始姿态：伸到位时可能已经压在目标身上
+                    if _sweep_swing_to(0.0):
+                        _enter_hold()
+            else:
+                var hit: Dictionary = _sweep_tip(_pod_length, next_length)
+                if not hit.is_empty():
+                    _on_thrust_hit(hit)
+                else:
+                    _pod_length = next_length
+                    if _pod_length >= _target_length:
+                        _enter_hold()
+
+        PodState.SWEEPING:
+            var next_t: float = 1.0
+            if _swing_duration > 0.0:
+                next_t = minf(_swing_t + delta / _swing_duration, 1.0)
+            var stopped: bool = _sweep_swing_to(next_t)
+            if stopped or _swing_t >= 1.0:
+                _enter_hold()
 
         PodState.HOLDING:
             _hold_timer -= delta
@@ -371,6 +435,17 @@ func _release() -> void:
     _target_length = lerpf(pod_min_length, pod_max_length, _attack_charge)
     _attack_dir = _aim_dir
     _pod_length = 0.0
+    _attack_is_swing = attack_shape == AttackShape.SWING
+    if _attack_is_swing:
+        _swing_axis = _swing_axis_for(_attack_dir)
+        var half: float = _swing_half_arc(_attack_charge)
+        _swing_start = half * _swing_side
+        _swing_end = -half * _swing_side
+        _swing_duration = lerpf(swing_time_short, swing_time_long, _attack_charge)
+        _swing_t = 0.0
+        _swing_hit_ids.clear()
+        if swing_alternate:
+            _swing_side = -_swing_side
     _pod_state = PodState.EXTENDING
 
 
@@ -406,11 +481,17 @@ func _sweep_tip(from_length: float, to_length: float) -> Dictionary:
     return hit
 
 
-func _on_hit(hit: Dictionary) -> void:
+func _on_thrust_hit(hit: Dictionary) -> void:
     _pod_length = hit["length"]
-    var target: Object = hit.get("collider")
-    if target != null and target.has_method(&"take_hit"):
-        target.call(&"take_hit", _attack_charge, _attack_dir)
+    _deal_hit(hit.get("collider"), _attack_dir)
+    _enter_hold()
+
+
+func _deal_hit(target: Object, direction: Vector3) -> void:
+    if target == null:
+        return
+    if target.has_method(&"take_hit"):
+        target.call(&"take_hit", _attack_charge, direction)
     if target is Node:
         hit_landed.emit(target, _attack_charge)
     # 按路径取 autoload 而不是直接写 HitStop：单脚本语法检查不加载 autoload，
@@ -418,7 +499,69 @@ func _on_hit(hit: Dictionary) -> void:
     var hit_stop: Node = get_node_or_null(^"/root/HitStop")
     if hit_stop != null:
         hit_stop.call(&"trigger", lerpf(hitstop_light, hitstop_heavy, _attack_charge))
-    _enter_hold()
+
+
+# ---------------------------------------------------------------- 挥扫
+
+## 挥扫轴：默认取"攻击方向的上方"，绕它转就是左右扫；
+## 按倾角把轴往"攻击方向的右方"转，就变成斜劈或竖劈
+func _swing_axis_for(dir: Vector3) -> Vector3:
+    var right: Vector3 = dir.cross(Vector3.UP)
+    if right.length_squared() < 0.0001:
+        # 正朝上/下打时"右方"没定义，借用身体正面的右方
+        right = _facing_basis().x
+    right = right.normalized()
+    var up: Vector3 = right.cross(dir).normalized()
+    var tilt: float = deg_to_rad(swing_plane_deg)
+    return (up * cos(tilt) + right * sin(tilt)).normalized()
+
+
+func _swing_half_arc(charge: float) -> float:
+    return deg_to_rad(lerpf(swing_arc_short_deg, swing_arc_long_deg, charge)) * 0.5
+
+
+## 伪足当前实际指向。挥扫时随进度转动，直刺时就是攻击方向
+func _pod_dir() -> Vector3:
+    if _attack_is_swing:
+        return _attack_dir.rotated(_swing_axis, lerpf(_swing_start, _swing_end, _swing_t))
+    return _attack_dir
+
+
+## 把挥扫推进到 to_t，按角度步长逐段检测，防止一帧扫过头跳过目标。
+## 返回 true 表示碰到目标且不穿透，挥扫应当停在这里
+func _sweep_swing_to(to_t: float) -> bool:
+    var from_t: float = _swing_t
+    var swept_deg: float = rad_to_deg(absf(_swing_end - _swing_start) * (to_t - from_t))
+    var steps: int = maxi(1, ceili(swept_deg / swing_check_step_deg))
+    for i: int in range(1, steps + 1):
+        _swing_t = lerpf(from_t, to_t, float(i) / float(steps))
+        if _check_pod_overlap() and not swing_pass_through:
+            return true
+    _swing_t = to_t
+    return false
+
+
+## 用一根胶囊体覆盖整条伪足做重叠检测：挥扫时打中的可能是伪足中段，不只是尖端
+func _check_pod_overlap() -> bool:
+    var dir: Vector3 = _pod_dir()
+    var total: float = body_radius + _pod_length
+    _pod_capsule.radius = pod_tip_radius
+    _pod_capsule.height = maxf(total, pod_tip_radius * 2.0)
+    _pod_query.collision_mask = hit_mask
+    _pod_query.transform = Transform3D(_basis_y_to(dir), global_position + dir * total * 0.5)
+    var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
+    var hit_any: bool = false
+    for result: Dictionary in space.intersect_shape(_pod_query, 8):
+        var target: Object = result.get("collider")
+        if target == null:
+            continue
+        var id: int = target.get_instance_id()
+        if _swing_hit_ids.has(id):
+            continue
+        _swing_hit_ids.append(id)
+        _deal_hit(target, dir)
+        hit_any = true
+    return hit_any
 
 
 # ---------------------------------------------------------------- 移动
@@ -457,7 +600,7 @@ func _move_scale() -> float:
     match _pod_state:
         PodState.CHARGING:
             return move_scale_charging
-        PodState.EXTENDING, PodState.HOLDING, PodState.RETRACTING:
+        PodState.EXTENDING, PodState.SWEEPING, PodState.HOLDING, PodState.RETRACTING:
             return lerpf(move_scale_extended_short, move_scale_extended_long, _attack_charge)
         _:
             return 1.0
@@ -487,18 +630,29 @@ func _update_visuals() -> void:
     if _aim_marker.visible:
         _aim_marker.position = _aim_dir * (body_radius + 0.35)
 
-    # 蓄力的可读性靠剪影：膜朝攻击方向鼓起、越蓄越长
-    _bulge_mesh.visible = _pod_state == PodState.CHARGING
+    var charging: bool = _pod_state == PodState.CHARGING
+    var swing_selected: bool = attack_shape == AttackShape.SWING
+
+    # 蓄力的可读性靠剪影：膜朝伪足将要伸出的方向鼓起、越蓄越长。
+    # 挥扫时鼓在起点那一侧，顺便预告这一下从哪边扫过来
+    _bulge_mesh.visible = charging
     if _bulge_mesh.visible:
         var c: float = _current_charge()
+        var bulge_dir: Vector3 = _aim_dir
+        if swing_selected:
+            bulge_dir = _aim_dir.rotated(_swing_axis_for(_aim_dir), _swing_half_arc(c) * _swing_side)
         var width: float = lerpf(0.35, 0.6, c)
         var length: float = lerpf(0.4, bulge_max_stretch, c)
         _bulge_mesh.transform = Transform3D(
-            _basis_y_to(_aim_dir) * Basis.from_scale(Vector3(width, length, width)),
-            _aim_dir * (body_radius * 0.6 + length * 0.25)
+            _basis_y_to(bulge_dir) * Basis.from_scale(Vector3(width, length, width)),
+            bulge_dir * (body_radius * 0.6 + length * 0.25)
         )
 
-    _reach_preview.visible = show_reach_preview and _pod_state == PodState.CHARGING
+    _swing_preview.visible = show_reach_preview and charging and swing_selected
+    if _swing_preview.visible:
+        _draw_swing_preview(_current_reach_length(), _current_charge())
+
+    _reach_preview.visible = show_reach_preview and charging and not swing_selected
     if _reach_preview.visible:
         var reach: float = _current_reach_length()
         _reach_preview.transform = Transform3D(
@@ -511,10 +665,35 @@ func _update_visuals() -> void:
         # 伪足从细胞中心长出，总长 = 半径 + 伸出长度；蓄得越满越细，像被拉长
         var total: float = body_radius + _pod_length
         var thickness: float = lerpf(1.0, 0.7, _attack_charge)
+        var dir: Vector3 = _pod_dir()
         _pod_mesh.transform = Transform3D(
-            _basis_y_to(_attack_dir) * Basis.from_scale(Vector3(thickness, total, thickness)),
-            _attack_dir * total * 0.5
+            _basis_y_to(dir) * Basis.from_scale(Vector3(thickness, total, thickness)),
+            dir * total * 0.5
         )
+
+
+## 扇形环带：从膜表面到伪足能伸到的距离，覆盖即将扫过的整个弧
+func _draw_swing_preview(reach: float, charge: float) -> void:
+    var mesh := _swing_preview.mesh as ImmediateMesh
+    if mesh == null:
+        return
+    mesh.clear_surfaces()
+    var axis: Vector3 = _swing_axis_for(_aim_dir)
+    var half: float = _swing_half_arc(charge)
+    var segments: int = maxi(2, ceili(rad_to_deg(half * 2.0) / 5.0))
+    var inner: float = body_radius
+    var outer: float = body_radius + reach
+    mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+    for i: int in segments:
+        var d0: Vector3 = _aim_dir.rotated(axis, lerpf(half, -half, float(i) / segments))
+        var d1: Vector3 = _aim_dir.rotated(axis, lerpf(half, -half, float(i + 1) / segments))
+        mesh.surface_add_vertex(d0 * inner)
+        mesh.surface_add_vertex(d0 * outer)
+        mesh.surface_add_vertex(d1 * outer)
+        mesh.surface_add_vertex(d0 * inner)
+        mesh.surface_add_vertex(d1 * outer)
+        mesh.surface_add_vertex(d1 * inner)
+    mesh.surface_end()
 
 
 ## 让网格的 Y 轴指向 dir（圆柱、椭球默认沿 Y 轴）
@@ -531,7 +710,8 @@ static func _basis_y_to(dir: Vector3) -> Basis:
 func get_debug_text() -> String:
     var state_name: String = PodState.keys()[_pod_state]
     var charge: float = _current_charge() if _pod_state == PodState.CHARGING else _attack_charge
-    return "上下: [%s镜头] [%s吸附] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
+    return "形态: %s   上下: [%s镜头] [%s吸附] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
+        "挥扫" if attack_shape == AttackShape.SWING else "直刺",
         "√" if vertical_from_camera else "×",
         "√" if vertical_assist_enabled else "×",
         "√" if directional_attacks else "×",
