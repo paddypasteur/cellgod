@@ -1,0 +1,100 @@
+[gd_scene load_steps=11 format=3 uid="uid://dit8qucvchkmj"]
+
+[ext_resource type="Script" uid="uid://dxem7n3briblx" path="res://scripts/arena/arena.gd" id="1_arena"]
+[ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
+[ext_resource type="PackedScene" path="res://scenes/training_dummy.tscn" id="3_dummy"]
+[ext_resource type="Script" uid="uid://cqf6g362v56av" path="res://scripts/camera/follow_camera.gd" id="4_camera"]
+[ext_resource type="Script" uid="uid://cl3gsn2gl344q" path="res://scripts/ui/debug_overlay.gd" id="5_overlay"]
+
+[sub_resource type="Environment" id="Env"]
+background_mode = 1
+background_color = Color(0.12, 0.07, 0.09, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.65, 0.55, 0.6, 1)
+ambient_light_energy = 0.6
+fog_enabled = true
+fog_light_color = Color(0.12, 0.07, 0.09, 1)
+fog_density = 0.012
+
+[sub_resource type="StandardMaterial3D" id="Mat_floor"]
+albedo_color = Color(0.5, 0.28, 0.3, 1)
+
+[sub_resource type="PlaneMesh" id="Mesh_floor"]
+material = SubResource("Mat_floor")
+size = Vector2(160, 160)
+
+[sub_resource type="StandardMaterial3D" id="Mat_boundary"]
+transparency = 1
+cull_mode = 2
+shading_mode = 0
+albedo_color = Color(1, 0.8, 0.85, 0.05)
+
+[sub_resource type="SphereMesh" id="Mesh_boundary"]
+material = SubResource("Mat_boundary")
+radius = 20.0
+height = 40.0
+radial_segments = 48
+rings = 24
+
+[node name="Arena" type="Node3D" node_paths=PackedStringArray("player")]
+script = ExtResource("1_arena")
+player = NodePath("Player")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.877583, -0.375547, 0.298016, 0, 0.62161, 0.783327, -0.479426, -0.687434, 0.545514, 0, 0, 0)
+shadow_enabled = true
+
+[node name="ReferenceFloor" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -22, 0)
+mesh = SubResource("Mesh_floor")
+
+[node name="Boundary" type="MeshInstance3D" parent="."]
+cast_shadow = 0
+mesh = SubResource("Mesh_boundary")
+
+[node name="Player" parent="." instance=ExtResource("2_player")]
+
+[node name="FollowCamera" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, 7)
+current = true
+script = ExtResource("4_camera")
+target = NodePath("../Player")
+
+[node name="Dummies" type="Node3D" parent="."]
+
+[node name="Front" parent="Dummies" instance=ExtResource("3_dummy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -5)
+
+[node name="FrontRightHigh" parent="Dummies" instance=ExtResource("3_dummy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4, 1.5, -3)
+
+[node name="LeftLow" parent="Dummies" instance=ExtResource("3_dummy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5, -1, -2)
+
+[node name="Above" parent="Dummies" instance=ExtResource("3_dummy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 1)
+
+[node name="Below" parent="Dummies" instance=ExtResource("3_dummy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -4, -1)
+
+[node name="BehindLeftHigh" parent="Dummies" instance=ExtResource("3_dummy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 2, 5)
+
+[node name="BehindRightLow" parent="Dummies" instance=ExtResource("3_dummy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, -2, 4)
+
+[node name="FarBehind" parent="Dummies" instance=ExtResource("3_dummy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 8)
+
+[node name="DebugOverlay" type="CanvasLayer" parent="." node_paths=PackedStringArray("player")]
+script = ExtResource("5_overlay")
+player = NodePath("../Player")
+
+[node name="Label" type="Label" parent="DebugOverlay"]
+offset_left = 12.0
+offset_top = 12.0
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4

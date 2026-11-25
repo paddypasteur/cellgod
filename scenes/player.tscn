@@ -1,0 +1,76 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/player/player.gd" id="1_player"]
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_body"]
+radius = 0.5
+
+[sub_resource type="StandardMaterial3D" id="Mat_body"]
+albedo_color = Color(0.55, 0.85, 0.75, 1)
+
+[sub_resource type="SphereMesh" id="Mesh_body"]
+material = SubResource("Mat_body")
+radius = 0.5
+height = 1.0
+
+[sub_resource type="StandardMaterial3D" id="Mat_pod"]
+albedo_color = Color(0.45, 0.78, 0.68, 1)
+
+[sub_resource type="CylinderMesh" id="Mesh_pod"]
+material = SubResource("Mat_pod")
+top_radius = 0.14
+bottom_radius = 0.2
+height = 1.0
+
+[sub_resource type="SphereMesh" id="Mesh_bulge"]
+material = SubResource("Mat_pod")
+radius = 0.5
+height = 1.0
+
+[sub_resource type="StandardMaterial3D" id="Mat_marker"]
+shading_mode = 0
+albedo_color = Color(1, 0.9, 0.3, 1)
+
+[sub_resource type="SphereMesh" id="Mesh_marker"]
+material = SubResource("Mat_marker")
+radius = 0.08
+height = 0.16
+
+[sub_resource type="StandardMaterial3D" id="Mat_preview"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(1, 1, 1, 0.25)
+
+[sub_resource type="CylinderMesh" id="Mesh_preview"]
+material = SubResource("Mat_preview")
+top_radius = 0.03
+bottom_radius = 0.03
+height = 1.0
+
+[node name="Player" type="CharacterBody3D"]
+collision_mask = 3
+motion_mode = 1
+script = ExtResource("1_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("SphereShape3D_body")
+
+[node name="Body" type="MeshInstance3D" parent="."]
+mesh = SubResource("Mesh_body")
+
+[node name="Pseudopod" type="MeshInstance3D" parent="."]
+visible = false
+mesh = SubResource("Mesh_pod")
+
+[node name="Bulge" type="MeshInstance3D" parent="."]
+visible = false
+mesh = SubResource("Mesh_bulge")
+
+[node name="AimMarker" type="MeshInstance3D" parent="."]
+cast_shadow = 0
+mesh = SubResource("Mesh_marker")
+
+[node name="ReachPreview" type="MeshInstance3D" parent="."]
+visible = false
+cast_shadow = 0
+mesh = SubResource("Mesh_preview")
