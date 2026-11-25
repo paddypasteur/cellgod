@@ -1,11 +1,13 @@
-[gd_scene load_steps=12 format=3 uid="uid://dit8qucvchkmj"]
+[gd_scene load_steps=14 format=3 uid="uid://dit8qucvchkmj"]
 
 [ext_resource type="Script" uid="uid://dxem7n3briblx" path="res://scripts/arena/arena.gd" id="1_arena"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
 [ext_resource type="PackedScene" path="res://scenes/training_dummy.tscn" id="3_dummy"]
 [ext_resource type="Script" uid="uid://cqf6g362v56av" path="res://scripts/camera/follow_camera.gd" id="4_camera"]
 [ext_resource type="Script" uid="uid://cl3gsn2gl344q" path="res://scripts/ui/debug_overlay.gd" id="5_overlay"]
-[ext_resource type="Script" path="res://scripts/ui/crosshair.gd" id="6_crosshair"]
+[ext_resource type="Script" uid="uid://bdoq8fiern376" path="res://scripts/ui/crosshair.gd" id="6_crosshair"]
+[ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="7_enemy"]
+[ext_resource type="Script" path="res://scripts/ui/health_bar.gd" id="8_health"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 1
@@ -91,6 +93,17 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, -2, 4)
 [node name="FarBehind" parent="Dummies" instance=ExtResource("3_dummy")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 8)
 
+[node name="Enemies" type="Node3D" parent="."]
+
+[node name="EnemyAbove" parent="Enemies" instance=ExtResource("7_enemy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 6, -3)
+
+[node name="EnemyBelow" parent="Enemies" instance=ExtResource("7_enemy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, -6, -3)
+
+[node name="EnemySide" parent="Enemies" instance=ExtResource("7_enemy")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0, 2)
+
 [node name="DebugOverlay" type="CanvasLayer" parent="." node_paths=PackedStringArray("player")]
 script = ExtResource("5_overlay")
 player = NodePath("../Player")
@@ -112,4 +125,15 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("6_crosshair")
+player = NodePath("../../Player")
+
+[node name="HealthBar" type="Control" parent="HUD" node_paths=PackedStringArray("player")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("8_health")
 player = NodePath("../../Player")

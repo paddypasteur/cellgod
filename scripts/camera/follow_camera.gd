@@ -45,6 +45,13 @@ extends Camera3D
 ## 松开右摇杆多久后，自动回正才重新生效（秒）。避免刚转好的镜头被立刻拉回去
 @export var auto_follow_resume_delay: float = 1.0
 
+@export_group("震动")
+## 震动强度为 1 时镜头最多偏移多少米
+@export var shake_max_offset: float = 0.35
+## 震动强度每秒衰减多少（强度范围 0..1）
+@export var shake_decay: float = 2.5
+
+var _trauma: float = 0.0
 var _yaw: float = 0.0
 var _pitch_deg: float = 0.0
 var _pivot: Vector3 = Vector3.ZERO
@@ -68,7 +75,13 @@ func _physics_process(delta: float) -> void:
     _pivot = _pivot.lerp(target.global_position, 1.0 - exp(-position_follow_rate * delta))
     _update_manual(delta)
     _update_yaw(delta)
+    _trauma = maxf(_trauma - shake_decay * delta, 0.0)
     _apply()
+
+
+## 叠加一次震动，强度 0..1，多次受击会叠加但不超过 1
+func add_shake(amount: float) -> void:
+    _trauma = clampf(_trauma + amount, 0.0, 1.0)
 
 
 func _update_manual(delta: float) -> void:
@@ -107,3 +120,7 @@ func _apply() -> void:
     var look_point: Vector3 = _pivot + Vector3.UP * look_height_offset + orbit.x * shoulder_offset
     global_position = look_point + orbit * Vector3(0.0, 0.0, distance)
     look_at(look_point, Vector3.UP)
+    # 震动只做平移、放在 look_at 之后：不改变朝向，绝不会带出 roll
+    if _trauma > 0.0:
+        var strength: float = _trauma * _trauma * shake_max_offset
+        global_position += Vector3(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * strength

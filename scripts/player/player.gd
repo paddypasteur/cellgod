@@ -7,6 +7,9 @@ extends CharacterBody3D
 ## 已删除，需要时可从 git 历史 3c64973 找回。
 
 signal hit_landed(target: Node, charge: float)
+signal health_changed(current: float, maximum: float)
+## 血量归零。原型阶段不做死亡流程，发完信号直接回满
+signal defeated
 
 enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 
@@ -119,6 +122,22 @@ enum AttackShape {
 ## 伪足能打到的物理层
 @export_flags_3d_physics var hit_mask: int = 2
 
+@export_group("生命与受击")
+@export var max_health: float = 100.0
+## 受击后的无敌时间（秒），防止同一下攻击连续扣血
+@export var hurt_invuln_time: float = 0.5
+## 受击后失去操控的时间（秒），期间只被击退带着走
+@export var hurt_stun_time: float = 0.2
+## 受击失控期间击退速度的衰减响应。越小被打得越远
+@export var hurt_knockback_damping: float = 4.0
+## 受击时的命中定格（秒）
+@export var hurt_hitstop: float = 0.06
+## 受击时的镜头震动强度（0..1）
+@export_range(0.0, 1.0) var hurt_camera_shake: float = 0.6
+## 受击闪红
+@export var hurt_flash_color: Color = Color(1.0, 0.2, 0.2)
+@export var hurt_flash_time: float = 0.25
+
 @export_group("显示")
 ## 身体半径。要和碰撞形状、身体网格保持一致
 @export var body_radius: float = 0.5
@@ -130,6 +149,13 @@ enum AttackShape {
 ## 竞技场边界由 Arena 在运行时写入，不在这里调
 var arena_center: Vector3 = Vector3.ZERO
 var arena_radius: float = 20.0
+
+var health: float = 0.0
+var _invuln_timer: float = 0.0
+var _stun_timer: float = 0.0
+var _hurt_flash_timer: float = 0.0
+var _body_material: StandardMaterial3D = null
+var _body_base_color: Color = Color.WHITE
 
 var _pod_state: PodState = PodState.IDLE
 var _charge_time: float = 0.0
@@ -179,6 +205,7 @@ var _pod_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.ne
 @onready var _facing_pivot: Node3D = $Facing
 @onready var _swing_preview: MeshInstance3D = $SwingPreview
 @onready var _target_marker: MeshInstance3D = $TargetMarker
+@onready var _body_mesh: MeshInstance3D = $Body
 
 
 func _ready() -> void:
@@ -190,6 +217,13 @@ func _ready() -> void:
     _pod_query.collide_with_bodies = true
     _pod_query.collide_with_areas = false
     _pod_query.exclude = [get_rid()]
+    health = max_health
+    # 复制身体材质用于受击闪红，不改动场景里的原材质
+    var source := _body_mesh.get_active_material(0) as StandardMaterial3D
+    if source != null:
+        _body_material = source.duplicate() as StandardMaterial3D
+        _body_mesh.material_override = _body_material
+        _body_base_color = _body_material.albedo_color
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -200,6 +234,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
+    _invuln_timer = maxf(_invuln_timer - delta, 0.0)
+    _stun_timer = maxf(_stun_timer - delta, 0.0)
+    _hurt_flash_timer = maxf(_hurt_flash_timer - delta, 0.0)
     _update_facing(delta)
     _update_aim()
     _update_pseudopod(delta)
@@ -564,13 +601,17 @@ func _check_pod_overlap() -> bool:
 # ---------------------------------------------------------------- 移动
 
 func _update_movement(delta: float) -> void:
-    var wish: Vector3 = _move_input_world(vertical_speed_scale)
-    if _vertical_move_locked():
-        wish.y = 0.0
-    wish = wish.limit_length(1.0)
-    var target_velocity: Vector3 = wish * max_speed * _move_scale()
-    var rate: float = acceleration if wish.length_squared() > 0.0001 else deceleration
-    velocity = velocity.lerp(target_velocity, 1.0 - exp(-rate * delta))
+    if _stun_timer > 0.0:
+        # 受击失控：不吃输入，只让击退速度慢慢衰减
+        velocity = velocity.lerp(Vector3.ZERO, 1.0 - exp(-hurt_knockback_damping * delta))
+    else:
+        var wish: Vector3 = _move_input_world(vertical_speed_scale)
+        if _vertical_move_locked():
+            wish.y = 0.0
+        wish = wish.limit_length(1.0)
+        var target_velocity: Vector3 = wish * max_speed * _move_scale()
+        var rate: float = acceleration if wish.length_squared() > 0.0001 else deceleration
+        velocity = velocity.lerp(target_velocity, 1.0 - exp(-rate * delta))
 
     move_and_slide()
     _apply_arena_bounds()
@@ -584,6 +625,31 @@ func _move_input_world(vertical_scale: float) -> Vector3:
     var planar: Vector2 = Input.get_vector(&"move_left", &"move_right", &"move_forward", &"move_back")
     var vertical: float = Input.get_axis(&"move_down", &"move_up")
     return right * planar.x - fwd * planar.y + Vector3.UP * vertical * vertical_scale
+
+
+## 敌人攻击命中时调用。返回 false 表示处于无敌时间、这一下没生效
+func take_damage(amount: float, knockback: Vector3) -> bool:
+    if _invuln_timer > 0.0:
+        return false
+    health -= amount
+    _invuln_timer = hurt_invuln_time
+    _stun_timer = hurt_stun_time
+    _hurt_flash_timer = hurt_flash_time
+    # 直接替换速度而不是叠加：被打中那一刻原来的移动应该被打断
+    velocity = knockback
+
+    var cam := get_viewport().get_camera_3d() as FollowCamera
+    if cam != null:
+        cam.add_shake(hurt_camera_shake)
+    var hit_stop: Node = get_node_or_null(^"/root/HitStop")
+    if hit_stop != null:
+        hit_stop.call(&"trigger", hurt_hitstop)
+
+    if health <= 0.0:
+        health = max_health
+        defeated.emit()
+    health_changed.emit(health, max_health)
+    return true
 
 
 ## 方向攻击下升降键在出招期间被借去定方向，身体不应该同时往上飘
@@ -622,6 +688,10 @@ func _update_visuals() -> void:
     var idle_or_charging: bool = _pod_state == PodState.IDLE or _pod_state == PodState.CHARGING
 
     _facing_pivot.basis = _facing_basis()
+
+    if _body_material != null:
+        var t: float = _hurt_flash_timer / maxf(hurt_flash_time, 0.001)
+        _body_material.albedo_color = _body_base_color.lerp(hurt_flash_color, t)
 
     _aim_marker.visible = idle_or_charging
     if _aim_marker.visible:
