@@ -1,0 +1,24 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# 导出产物
+/build/
+/export/
+/exports/
+*.exe
+*.pck
+*.zip
+*.apk
+*.aab
+*.x86_64
+*.app
+*.dmg
+
+# 导出预设可能含签名密钥/密码，含敏感信息前不要提交
+export_credentials.cfg
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+desktop.ini
