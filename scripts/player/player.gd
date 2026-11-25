@@ -9,14 +9,12 @@ signal hit_landed(target: Node, charge: float)
 signal health_changed(current: float, maximum: float)
 ## 血量归零。原型阶段不做死亡流程，发完信号直接回满
 signal defeated
+## 发起一次闪避，direction 是世界空间单位向量（记录垂直分量用）
+signal dodged(direction: Vector3)
+## 一次攻击正好落在闪避无敌时间里被躲掉（每次闪避最多发一次）
+signal dodge_saved
 
 enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
-
-## 锁定粘性预设。给开发者 A/B 用，按键当场切换，问他"哪个更好"而不是让他调滑块
-const LOCK_PRESETS: Array[Dictionary] = [
-    {"name": "A 跟手", "keep_bias": 0.75, "min_hold": 0.15},
-    {"name": "B 粘手", "keep_bias": 0.5, "min_hold": 0.35},
-]
 
 @export_group("移动")
 ## 最大悬浮速度（米/秒）
@@ -50,8 +48,11 @@ const LOCK_PRESETS: Array[Dictionary] = [
 ## 镜头注视着主角，屏幕正中几乎就是主角自己；上移一点，准星才不会压在主角身上，
 ## 索敌也会优先选主角前上方的敌人，而不是被主角挡住的那只
 @export var aim_point_offset: Vector2 = Vector2(0.0, -0.12)
-## 当前锁定粘性预设（见 LOCK_PRESETS）。运行中按 F2 / 手柄十字键上切换
-@export var lock_preset: int = 0
+## 当前目标的屏幕距离乘这个系数（<1 = 在位优势），新目标必须比它更近才抢得走。
+## 2026-11-25 A/B：0.75（跟手）vs 0.5（粘手），开发者分不出，取余地更大的 0.75
+@export_range(0.1, 1.0) var target_keep_bias: float = 0.75
+## 换目标后至少锁这么久（秒），除非目标死亡或丢失
+@export var target_min_hold: float = 0.15
 ## 正在前摇或冲刺的敌人，屏幕距离按这个系数打折：同样远时，扑过来的那只优先被选中
 @export_range(0.1, 1.0) var threat_bias: float = 0.7
 ## 已锁定的目标允许多出多少射程、屏幕半径放宽多少倍才丢失，避免在边界上反复进出
@@ -130,6 +131,22 @@ const LOCK_PRESETS: Array[Dictionary] = [
 ## 伪足能打到的物理层
 @export_flags_3d_physics var hit_mask: int = 2
 
+@export_group("闪避")
+## 一次闪避冲出去多远（米）
+@export var dodge_distance: float = 4.5
+## 冲刺持续多久（秒）
+@export var dodge_duration: float = 0.22
+## 从闪避开始算起的无敌时间（秒）
+@export var dodge_iframe_time: float = 0.18
+## 闪避结束后多久才能再闪（秒）
+@export var dodge_cooldown: float = 0.6
+## 闪避结束时保留多少冲刺速度（0..1），太小会有急刹车感
+@export_range(0.0, 1.0) var dodge_exit_speed_scale: float = 0.35
+## 蓄力中能否闪避（会取消这次蓄力）。伪足伸出后一律不能闪：长伪足"门户大开"的代价不能被闪避抵消
+@export var dodge_cancels_charge: bool = true
+## 提前按下的闪避记住多久（秒）
+@export var dodge_buffer_time: float = 0.15
+
 @export_group("生命与受击")
 @export var max_health: float = 100.0
 ## 受击后的无敌时间（秒），防止同一下攻击连续扣血
@@ -164,6 +181,13 @@ var _stun_timer: float = 0.0
 var _hurt_flash_timer: float = 0.0
 var _body_material: StandardMaterial3D = null
 var _body_base_color: Color = Color.WHITE
+
+var _dodge_timer: float = 0.0
+var _dodge_cooldown_timer: float = 0.0
+var _dodge_buffer: float = 0.0
+var _iframe_timer: float = 0.0
+var _dodge_dir: Vector3 = Vector3.FORWARD
+var _dodge_saved_once: bool = false
 
 var _pod_state: PodState = PodState.IDLE
 var _charge_time: float = 0.0
@@ -232,8 +256,8 @@ func _unhandled_input(event: InputEvent) -> void:
     # 命中定格时物理帧暂停，轮询会漏掉定格期间的按键
     if event.is_action_pressed(&"pseudopod"):
         _buffer_timer = input_buffer_time
-    elif event.is_action_pressed(&"cycle_preset"):
-        lock_preset = (lock_preset + 1) % LOCK_PRESETS.size()
+    elif event.is_action_pressed(&"dodge"):
+        _dodge_buffer = dodge_buffer_time
 
 
 func _physics_process(delta: float) -> void:
@@ -241,8 +265,12 @@ func _physics_process(delta: float) -> void:
     _stun_timer = maxf(_stun_timer - delta, 0.0)
     _hurt_flash_timer = maxf(_hurt_flash_timer - delta, 0.0)
     _target_hold_timer = maxf(_target_hold_timer - delta, 0.0)
+    _dodge_cooldown_timer = maxf(_dodge_cooldown_timer - delta, 0.0)
+    _dodge_buffer = maxf(_dodge_buffer - delta, 0.0)
+    _iframe_timer = maxf(_iframe_timer - delta, 0.0)
     _update_facing(delta)
     _update_aim()
+    _try_start_dodge()
     _update_pseudopod(delta)
     _update_movement(delta)
     _update_visuals()
@@ -327,7 +355,6 @@ func _select_target(reach: float) -> Node3D:
     var screen: Vector2 = get_viewport().get_visible_rect().size
     var max_px: float = screen.y * target_screen_radius
     var max_dist: float = reach + pod_tip_radius + target_reach_slack
-    var preset: Dictionary = LOCK_PRESETS[clampi(lock_preset, 0, LOCK_PRESETS.size() - 1)]
 
     var current: Node3D = _target
     var current_score: float = -1.0
@@ -343,7 +370,7 @@ func _select_target(reach: float) -> Node3D:
     var best: Node3D = current
     var best_score: float = INF
     if current != null:
-        best_score = current_score * float(preset["keep_bias"])
+        best_score = current_score * target_keep_bias
     for node: Node in get_tree().get_nodes_in_group(&"target"):
         var t := node as Node3D
         if t == null or t == current:
@@ -353,7 +380,7 @@ func _select_target(reach: float) -> Node3D:
             best_score = score
             best = t
     if best != current:
-        _target_hold_timer = float(preset["min_hold"])
+        _target_hold_timer = target_min_hold
     return best
 
 
@@ -370,12 +397,6 @@ func _target_score(cam: Camera3D, t: Node3D, max_dist: float, max_px: float) -> 
     if t.has_method(&"is_threatening") and t.call(&"is_threatening"):
         px *= threat_bias
     return px
-
-
-## 给 HUD 显示用的一行大白话
-func get_preset_hint() -> String:
-    var preset: Dictionary = LOCK_PRESETS[clampi(lock_preset, 0, LOCK_PRESETS.size() - 1)]
-    return "锁定：%s（F2 / 十字键上 切换）" % preset["name"]
 
 
 func has_target() -> bool:
@@ -431,7 +452,8 @@ func _update_pseudopod(delta: float) -> void:
 
     match _pod_state:
         PodState.IDLE:
-            if _buffer_timer > 0.0:
+            # 闪避途中不起手，按键留在缓冲里，闪完立刻接
+            if _buffer_timer > 0.0 and _dodge_timer <= 0.0:
                 _buffer_timer = 0.0
                 _charge_time = 0.0
                 if snap_facing_on_attack:
@@ -602,7 +624,12 @@ func _check_pod_overlap() -> bool:
 # ---------------------------------------------------------------- 移动
 
 func _update_movement(delta: float) -> void:
-    if _stun_timer > 0.0:
+    if _dodge_timer > 0.0:
+        _dodge_timer -= delta
+        velocity = _dodge_dir * (dodge_distance / maxf(dodge_duration, 0.01))
+        if _dodge_timer <= 0.0:
+            velocity *= dodge_exit_speed_scale
+    elif _stun_timer > 0.0:
         # 受击失控：不吃输入，只让击退速度慢慢衰减
         velocity = velocity.lerp(Vector3.ZERO, 1.0 - exp(-hurt_knockback_damping * delta))
     else:
@@ -628,8 +655,52 @@ func _move_input_world(vertical_scale: float) -> Vector3:
     return right * planar.x - fwd * planar.y + Vector3.UP * vertical * vertical_scale
 
 
+## 闪避方向 = 当前移动输入（含上升/下降），所以能往上、往下躲；没推方向就往身后撤。
+## 只能在待机或蓄力时闪：伪足伸出去之后"门户大开"是长伪足的代价，不能用闪避抵消
+func _try_start_dodge() -> void:
+    if _dodge_buffer <= 0.0 or _dodge_timer > 0.0 or _dodge_cooldown_timer > 0.0 or _stun_timer > 0.0:
+        return
+    match _pod_state:
+        PodState.IDLE:
+            pass
+        PodState.CHARGING:
+            if not dodge_cancels_charge:
+                return
+            _pod_state = PodState.IDLE
+            _charge_time = 0.0
+        _:
+            return
+    _dodge_buffer = 0.0
+    var dir: Vector3 = _move_input_world(1.0)
+    if dir.length_squared() < 0.01:
+        dir = -(_facing_basis() * Vector3.FORWARD)
+    _dodge_dir = dir.normalized()
+    _dodge_timer = dodge_duration
+    _iframe_timer = dodge_iframe_time
+    _dodge_cooldown_timer = dodge_duration + dodge_cooldown
+    _dodge_saved_once = false
+    _play_sfx(&"swing", 1.7)
+    dodged.emit(_dodge_dir)
+
+
+func is_dodging() -> bool:
+    return _dodge_timer > 0.0
+
+
+## 血条下面那行提示。闪避冷却中才显示，平时空着不占地方
+func get_hud_hint() -> String:
+    if _dodge_cooldown_timer > 0.0:
+        return "闪避冷却中"
+    return ""
+
+
 ## 敌人攻击命中时调用。返回 false 表示处于无敌时间、这一下没生效
 func take_damage(amount: float, knockback: Vector3) -> bool:
+    if _iframe_timer > 0.0:
+        if not _dodge_saved_once:
+            _dodge_saved_once = true
+            dodge_saved.emit()
+        return false
     if _invuln_timer > 0.0:
         return false
     health -= amount
@@ -700,7 +771,11 @@ func _update_visuals() -> void:
 
     if _body_material != null:
         var t: float = _hurt_flash_timer / maxf(hurt_flash_time, 0.001)
-        _body_material.albedo_color = _body_base_color.lerp(hurt_flash_color, t)
+        var color: Color = _body_base_color.lerp(hurt_flash_color, t)
+        # 无敌时间内身体发白，玩家能看出"这段时间被打不到"
+        if _iframe_timer > 0.0:
+            color = color.lerp(Color.WHITE, 0.6)
+        _body_material.albedo_color = color
 
     _aim_marker.visible = idle_or_charging
     if _aim_marker.visible:

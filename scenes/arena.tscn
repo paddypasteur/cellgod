@@ -8,6 +8,7 @@
 [ext_resource type="Script" uid="uid://bdoq8fiern376" path="res://scripts/ui/crosshair.gd" id="6_crosshair"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="7_enemy"]
 [ext_resource type="Script" uid="uid://cpmi0c5jtvhbt" path="res://scripts/ui/health_bar.gd" id="8_health"]
+[ext_resource type="Script" path="res://scripts/debug/playtest_logger.gd" id="9_logger"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 1
@@ -137,3 +138,7 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("8_health")
 player = NodePath("../../Player")
+
+[node name="PlaytestLogger" type="Node" parent="." node_paths=PackedStringArray("player")]
+script = ExtResource("9_logger")
+player = NodePath("../Player")

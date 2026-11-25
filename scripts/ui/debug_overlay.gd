@@ -39,10 +39,13 @@ func _process(_delta: float) -> void:
     if player != null:
         text += player.get_debug_text() + "\n"
     text += "命中 %d   被击倒 %d\n" % [_hits, _defeats]
+    var logger: Node = get_tree().get_first_node_in_group(&"playtest_logger")
+    if logger != null:
+        text += str(logger.call(&"get_summary")) + "\n"
     text += _enemies_text() + "\n"
     text += _joypad_text() + "\n\n"
-    text += "手柄: 左摇杆移动  RB/LB 升/降  右摇杆镜头  RT 蓄力（按住 RB/LB 出招=上挑/下砸）  View 键开关本面板\n"
-    text += "键鼠(临时): WASD 移动  空格/Shift 升/降  左键蓄力  F1 开关本面板"
+    text += "手柄: 左摇杆移动  RB/LB 升/降  右摇杆镜头  RT 蓄力（按住 RB/LB 出招=上挑/下砸）  B 闪避  View 键开关本面板\n"
+    text += "键鼠(临时): WASD 移动  空格/Shift 升/降  左键蓄力  右键闪避  F1 开关本面板"
     _label.text = text
 
 
