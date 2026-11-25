@@ -35,10 +35,23 @@ def main() -> None:
     events = lambda name: [r for r in rows if r["event"] == name]
     print(f"文件 {os.path.basename(path)}，时长 {max(float(r['t']) for r in rows):.0f} 秒")
 
-    elev = [float(r["elev_deg"]) for r in events("dodge")]
-    up = sum(e >= 20 for e in elev)
-    down = sum(e <= -20 for e in elev)
-    print(f"闪避 {len(elev)} 次：水平 {len(elev) - up - down} / 往上 {up} / 往下 {down}")
+    def dodge_line(dodges: list) -> str:
+        elev = [float(r["elev_deg"]) for r in dodges]
+        up = sum(e >= 20 for e in elev)
+        down = sum(e <= -20 for e in elev)
+        share = 100 * (up + down) / len(elev) if elev else 0
+        return f"{len(elev)} 次：水平 {len(elev) - up - down} / 往上 {up} / 往下 {down}（垂直占 {share:.0f}%）"
+
+    print("闪避 " + dodge_line(events("dodge")))
+    # 新版记录带 preset 列（高度标记画法），试玩中途切换过 A/B 时分开统计
+    names = {"0": "A 投到地面", "1": "B 投到你的高度"}
+    presets = sorted({r.get("preset") or "" for r in rows} - {""})
+    if len(presets) > 1:
+        for p in presets:
+            sub = [r for r in rows if r.get("preset") == p]
+            secs = sum(r["event"] == "sample" for r in sub) * 0.5
+            print(f"  [{names.get(p, p)}] 约 {secs:.0f} 秒，闪避 " +
+                  dodge_line([r for r in sub if r["event"] == "dodge"]))
     print(f"靠无敌时间躲掉 {len(events('saved'))} 次")
 
     hurt = events("hurt")

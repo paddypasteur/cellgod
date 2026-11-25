@@ -238,6 +238,7 @@ var _pod_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.ne
 
 
 func _ready() -> void:
+    add_to_group(&"hud_hint")
     _pod_query.shape = _pod_capsule
     _pod_query.collide_with_bodies = true
     _pod_query.collide_with_areas = false

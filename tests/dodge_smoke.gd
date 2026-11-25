@@ -36,7 +36,10 @@ func _check(label: String, ok: bool, detail: String = "") -> void:
 
 func _physics_process(_delta: float) -> bool:
     _frame += 1
-    match _frame:
+    # 预热 1 秒：开场第一帧很慢时引擎会在一帧里补跑多个物理步，
+    # 按键事件要到下一个空闲帧才处理，太早的检查会读到"还没按"的状态
+    var f: int = _frame - 60
+    match f:
         5:
             _y0 = _p.global_position.y
             Input.action_press(&"move_up")

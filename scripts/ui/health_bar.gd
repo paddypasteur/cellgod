@@ -1,7 +1,8 @@
 class_name HealthBar
 extends Control
 ## 屏幕底部的玩家血条。白盒阶段直接自绘，不引入主题和贴图。
-## 血条下面再画一行提示（由 Player 提供，比如 A/B 预设、闪避冷却），调试面板关掉时也看得到。
+## 血条下面再画一行提示（收集 hud_hint 组里各节点的 get_hud_hint()，比如 A/B 预设、闪避冷却），
+## 调试面板关掉时也看得到。
 
 @export var player: Player
 
@@ -36,7 +37,13 @@ func _draw() -> void:
     var text: String = "HP %d / %d" % [ceili(player.health), ceili(player.max_health)]
     draw_string(ThemeDB.fallback_font, pos + Vector2(6.0, bar_size.y - 4.0), text,
         HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, color_text)
-    var hint: String = player.get_hud_hint()
+    # 收集所有提供提示的节点（玩家的闪避冷却、高度标记的 A/B 等），拼成一行
+    var hints: PackedStringArray = []
+    for node: Node in get_tree().get_nodes_in_group(&"hud_hint"):
+        var h: String = str(node.call(&"get_hud_hint"))
+        if not h.is_empty():
+            hints.append(h)
+    var hint: String = "    ".join(hints)
     if not hint.is_empty():
         draw_string(ThemeDB.fallback_font, pos + Vector2(0.0, bar_size.y + font_size + 6.0),
             hint, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, color_text)

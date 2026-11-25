@@ -10,6 +10,8 @@ extends Node
 ##             （不能用命中那一刻的高度：冲刺已经扑到玩家身边，永远接近 0）
 ##   windup    敌人开始起手；on_screen = 起手那一刻是否在镜头视野内
 ##   sample    每 0.5 秒记一次玩家位置，用来算上下移动的幅度
+## 每行末尾的 preset 列 = 当时高度标记的画法（0 = 投到地面，1 = 投到玩家高度），
+## 开发者试玩中途切换 A/B，事后也能按画法分开统计
 
 @export var player: Player
 ## 关掉就不写文件
@@ -47,7 +49,7 @@ func _ready() -> void:
     if _file == null:
         enabled = false
         return
-    _file.store_line("t,event,x,y,z,elev_deg,rel_y,on_screen,threats")
+    _file.store_line("t,event,x,y,z,elev_deg,rel_y,on_screen,threats,preset")
     print("试玩记录写入 ", ProjectSettings.globalize_path(path))
     player.dodged.connect(_on_dodged)
     player.dodge_saved.connect(_on_dodge_saved)
@@ -140,11 +142,14 @@ func _write(event: String, elev: float, rel_y: float, on_screen: int) -> void:
     if _file == null:
         return
     var p: Vector3 = player.global_position
-    _file.store_line("%.2f,%s,%.2f,%.2f,%.2f,%.1f,%s,%s,%d" % [
+    var markers: Node = get_tree().current_scene.get_node_or_null(^"HeightMarkers") if get_tree().current_scene else null
+    var preset: String = str(markers.get("mode")) if markers != null else ""
+    _file.store_line("%.2f,%s,%.2f,%.2f,%.2f,%.1f,%s,%s,%d,%s" % [
         _time, event, p.x, p.y, p.z, elev,
         "" if is_nan(rel_y) else "%.2f" % rel_y,
         "" if on_screen < 0 else str(on_screen),
         _threat_count(),
+        preset,
     ])
     # 每行都落盘：试玩可能直接关窗口，不能指望正常退出时才写
     _file.flush()
