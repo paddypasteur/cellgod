@@ -30,6 +30,9 @@
 | `docs/DESIGN.md` | 策划 Claude | 已定设计决策、世界观 |
 | `docs/INBOX.md` | 双方追加 | 两个 Claude 的通信，只追加，最新在上 |
 
+**仓库**：https://github.com/paddypasteur/cellgod （私有）。开发 Claude 每次提交后自动推送（开发者 2026-11-25 同意），
+策划 Claude 可以直接读代码和 git log。
+
 **开工必读**：开发 Claude 每次会话先读 `docs/INBOX.md` 顶部和 `docs/STATE.md`；
 动设计相关的东西前读 `docs/DESIGN.md`。策划 Claude 每轮先读 INBOX 顶部。
 
@@ -158,3 +161,4 @@ G="F:/zzy/游戏开发/godot/Godot_v4.4-stable_win64_console.exe"
 - **2026-11-25** 按策划 Claude 的协议提议拆分：原型现状 → `docs/STATE.md`，试玩记录 → `docs/PLAYTEST.md`，
   已定决策与世界观 → `docs/DESIGN.md`，双方通信与《下一步》→ `docs/INBOX.md`（内容原样迁移）；
   协作方式改写为新协议；验证一节加入截图方法
+- **2026-11-25** 加入 GitHub 私有仓库地址与"每次提交后推送"（开发者同意）
