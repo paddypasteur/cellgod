@@ -1,6 +1,6 @@
 class_name Crosshair
 extends Control
-## 屏幕中心准星。索敌以"离屏幕中心最近"为准，准星就是告诉玩家中心在哪；
+## 准星，画在 Player 的索敌点上（默认在屏幕中心略偏上）。索敌以"离这个点最近"为准；
 ## 有目标被选中时变色，让玩家不用盯着目标头顶的标记也知道"这一下有人接"。
 
 @export var player: Player
@@ -30,14 +30,13 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
-    var targeted: bool = player != null and player.has_target()
-    if targeted != _targeted:
-        _targeted = targeted
-        queue_redraw()
+    _targeted = player != null and player.has_target()
+    # 每帧重画：准星位置跟着 Player 的索敌点参数走，运行时拖参数要立刻看到
+    queue_redraw()
 
 
 func _draw() -> void:
-    var center: Vector2 = size * 0.5
+    var center: Vector2 = player.get_aim_screen_point() if player != null else size * 0.5
     var color: Color = color_targeted if _targeted else color_idle
     for dir: Vector2 in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
         draw_line(center + dir * gap_px, center + dir * (gap_px + arm_length_px), color, thickness_px, true)

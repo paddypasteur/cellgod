@@ -47,6 +47,10 @@ enum AttackShape {
 @export var target_reach_slack: float = 1.0
 ## 选中标记悬在目标中心上方多高
 @export var target_marker_height: float = 1.0
+## 索敌点（也是准星位置）相对屏幕中心的偏移，单位是屏幕高度的比例，负 y = 往上。
+## 镜头注视着主角，屏幕正中几乎就是主角自己；上移一点，准星才不会压在主角身上，
+## 索敌也会优先选主角前上方的敌人，而不是被主角挡住的那只
+@export var aim_point_offset: Vector2 = Vector2(0.0, -0.12)
 
 @export_group("上下方向（没有选中目标时）")
 ## 开关 1：攻击的上下角度跟随镜头俯仰。右摇杆往上看，伪足就往上打
@@ -318,7 +322,7 @@ func _find_screen_target(reach: float) -> Node3D:
     if cam == null:
         return null
     var screen: Vector2 = get_viewport().get_visible_rect().size
-    var center: Vector2 = screen * 0.5
+    var center: Vector2 = get_aim_screen_point()
     var best_px: float = screen.y * target_screen_radius
     var max_dist: float = reach + pod_tip_radius + target_reach_slack
     var best: Node3D = null
@@ -340,6 +344,12 @@ func _find_screen_target(reach: float) -> Node3D:
 
 func has_target() -> bool:
     return _target != null
+
+
+## 索敌用的屏幕点，准星画在同一个位置，保证"看到的准星"和"实际索敌点"永远一致
+func get_aim_screen_point() -> Vector2:
+    var screen: Vector2 = get_viewport().get_visible_rect().size
+    return screen * 0.5 + aim_point_offset * screen.y
 
 
 ## 有目标时身体直接转向攻击方向，让"正面"和"打向哪"保持一致，否则小方块指着别处会误导

@@ -2,6 +2,10 @@ extends CanvasLayer
 ## 调手感用的文字面板。不是正式 HUD。
 
 @export var player: Player
+## 字号。面板只是调试用，字小一点少挡画面
+@export var font_size: int = 12
+## 启动时是否显示。运行中按 F1 / 手柄 View(Back) 键开关
+@export var start_visible: bool = true
 
 var _hits: int = 0
 var _defeats: int = 0
@@ -10,9 +14,16 @@ var _defeats: int = 0
 
 
 func _ready() -> void:
+    visible = start_visible
+    _label.add_theme_font_size_override(&"font_size", font_size)
     if player != null:
         player.hit_landed.connect(_on_hit_landed)
         player.defeated.connect(_on_defeated)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+    if event.is_action_pressed(&"toggle_debug"):
+        visible = not visible
 
 
 func _on_hit_landed(_target: Node, _charge: float) -> void:
@@ -30,8 +41,8 @@ func _process(_delta: float) -> void:
     text += "命中 %d   被击倒 %d\n" % [_hits, _defeats]
     text += _enemies_text() + "\n"
     text += _joypad_text() + "\n\n"
-    text += "手柄: 左摇杆移动  RB/LB 升/降  右摇杆镜头  RT 按住蓄力（按住 RB/LB 出招 = 上挑/下砸）\n"
-    text += "键鼠(临时): WASD 移动  空格/Shift 升/降  左键按住蓄力（无鼠标转镜头）"
+    text += "手柄: 左摇杆移动  RB/LB 升/降  右摇杆镜头  RT 蓄力（按住 RB/LB 出招=上挑/下砸）  View 键开关本面板\n"
+    text += "键鼠(临时): WASD 移动  空格/Shift 升/降  左键蓄力  F1 开关本面板"
     _label.text = text
 
 
