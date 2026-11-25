@@ -1,10 +1,9 @@
 class_name Player
 extends CharacterBody3D
 ## 原型主角：无定形免疫细胞。
-## 当前操作采用类魂方案：身体有正面，转向移动方向，攻击永远朝正面打；
-## 攻击的上下角度由三个可组合的开关决定（镜头俯仰 / 不对称吸附 / 方向攻击）。
-## 早期试过的另外四种瞄准方案（右摇杆瞄准、移动方向、镜头水平前方、镜头实际朝向）
-## 已删除，需要时可从 git 历史 3c64973 找回。
+## 类魂操作：身体有正面，转向移动方向；有索敌目标时打目标，没有时朝正面打。
+## 攻击形态是挥扫。被淘汰的方案不留开关，从 git 历史找回：
+## 四种旧瞄准方案在 3c64973，直刺在 fa090b9。
 
 signal hit_landed(target: Node, charge: float)
 signal health_changed(current: float, maximum: float)
@@ -13,11 +12,11 @@ signal defeated
 
 enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 
-## 攻击形态。保留直刺用于 A/B 对比
-enum AttackShape {
-    THRUST,  ## 0 = 直线前刺：从背后看伪足和视线几乎共线，难读
-    SWING,   ## 1 = 伸出后挥扫一个弧：轨迹落在身体轮廓之外，从背后看得清
-}
+## 锁定粘性预设。给开发者 A/B 用，按键当场切换，问他"哪个更好"而不是让他调滑块
+const LOCK_PRESETS: Array[Dictionary] = [
+    {"name": "A 跟手", "keep_bias": 0.75, "min_hold": 0.15},
+    {"name": "B 粘手", "keep_bias": 0.5, "min_hold": 0.35},
+]
 
 @export_group("移动")
 ## 最大悬浮速度（米/秒）
@@ -51,6 +50,13 @@ enum AttackShape {
 ## 镜头注视着主角，屏幕正中几乎就是主角自己；上移一点，准星才不会压在主角身上，
 ## 索敌也会优先选主角前上方的敌人，而不是被主角挡住的那只
 @export var aim_point_offset: Vector2 = Vector2(0.0, -0.12)
+## 当前锁定粘性预设（见 LOCK_PRESETS）。运行中按 F2 / 手柄十字键上切换
+@export var lock_preset: int = 0
+## 正在前摇或冲刺的敌人，屏幕距离按这个系数打折：同样远时，扑过来的那只优先被选中
+@export_range(0.1, 1.0) var threat_bias: float = 0.7
+## 已锁定的目标允许多出多少射程、屏幕半径放宽多少倍才丢失，避免在边界上反复进出
+@export var keep_extra_range: float = 1.5
+@export var keep_screen_radius_scale: float = 1.3
 
 @export_group("上下方向（没有选中目标时）")
 ## 开关 1：攻击的上下角度跟随镜头俯仰。右摇杆往上看，伪足就往上打
@@ -78,8 +84,6 @@ enum AttackShape {
 @export var tap_threshold: float = 0.1
 
 @export_group("伪足 · 挥扫")
-## 攻击形态。运行中切换，下一次出招生效
-@export var attack_shape: AttackShape = AttackShape.SWING
 ## 轻点时挥扫的总角度（度）
 @export_range(0.0, 300.0) var swing_arc_short_deg: float = 70.0
 ## 蓄满时挥扫的总角度（度）
@@ -118,7 +122,7 @@ enum AttackShape {
 @export_range(0.0, 1.0) var move_scale_extended_long: float = 0.2
 
 @export_group("伪足 · 命中")
-## 伪足尖端的判定半径
+## 伪足的判定半径（粗细）
 @export var pod_tip_radius: float = 0.35
 ## 命中定格时长（秒），按蓄力在轻/重之间插值。重击多冻几帧
 @export var hitstop_light: float = 0.05
@@ -145,7 +149,7 @@ enum AttackShape {
 @export_group("显示")
 ## 身体半径。要和碰撞形状、身体网格保持一致
 @export var body_radius: float = 0.5
-## 蓄力时显示预告：直刺是一条射程细线，挥扫是一片扇形
+## 蓄力时显示一片扇形，预告将要扫过的范围
 @export var show_reach_preview: bool = true
 ## 蓄满时膜鼓起部分沿攻击方向拉长到多少（相对身体直径）
 @export var bulge_max_stretch: float = 1.2
@@ -170,6 +174,8 @@ var _buffer_timer: float = 0.0
 var _aim_dir: Vector3 = Vector3.FORWARD
 ## 当前选中的目标，没有则为 null
 var _target: Node3D = null
+## 刚换目标后的最短锁定时间，期间除非目标失效否则不换
+var _target_hold_timer: float = 0.0
 
 ## 身体正面。存成偏航+俯仰两个角而不是向量，
 ## 这样转身用 rotate_toward 就不会遇到"正好转 180°时方向不确定"的问题
@@ -183,8 +189,6 @@ var _target_length: float = 0.0
 ## 当前伪足从膜表面伸出的长度
 var _pod_length: float = 0.0
 
-## 本次攻击是否挥扫（松手时锁定，出招中途切换形态不影响这一下）
-var _attack_is_swing: bool = false
 ## 挥扫绕这根轴转；_attack_dir 是弧的正中，起点/终点是相对正中的角度
 var _swing_axis: Vector3 = Vector3.UP
 var _swing_start: float = 0.0
@@ -197,15 +201,12 @@ var _swing_side: float = 1.0
 ## 本次挥扫已经打中过的目标，避免同一个目标被一次挥扫判定多次
 var _swing_hit_ids: Array[int] = []
 
-var _tip_shape: SphereShape3D = SphereShape3D.new()
-var _tip_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
 var _pod_capsule: CapsuleShape3D = CapsuleShape3D.new()
 var _pod_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
 
 @onready var _pod_mesh: MeshInstance3D = $Pseudopod
 @onready var _bulge_mesh: MeshInstance3D = $Bulge
 @onready var _aim_marker: MeshInstance3D = $AimMarker
-@onready var _reach_preview: MeshInstance3D = $ReachPreview
 @onready var _facing_pivot: Node3D = $Facing
 @onready var _swing_preview: MeshInstance3D = $SwingPreview
 @onready var _target_marker: MeshInstance3D = $TargetMarker
@@ -213,10 +214,6 @@ var _pod_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.ne
 
 
 func _ready() -> void:
-    _tip_query.shape = _tip_shape
-    _tip_query.collide_with_bodies = true
-    _tip_query.collide_with_areas = false
-    _tip_query.exclude = [get_rid()]
     _pod_query.shape = _pod_capsule
     _pod_query.collide_with_bodies = true
     _pod_query.collide_with_areas = false
@@ -235,12 +232,15 @@ func _unhandled_input(event: InputEvent) -> void:
     # 命中定格时物理帧暂停，轮询会漏掉定格期间的按键
     if event.is_action_pressed(&"pseudopod"):
         _buffer_timer = input_buffer_time
+    elif event.is_action_pressed(&"cycle_preset"):
+        lock_preset = (lock_preset + 1) % LOCK_PRESETS.size()
 
 
 func _physics_process(delta: float) -> void:
     _invuln_timer = maxf(_invuln_timer - delta, 0.0)
     _stun_timer = maxf(_stun_timer - delta, 0.0)
     _hurt_flash_timer = maxf(_hurt_flash_timer - delta, 0.0)
+    _target_hold_timer = maxf(_target_hold_timer - delta, 0.0)
     _update_facing(delta)
     _update_aim()
     _update_pseudopod(delta)
@@ -299,9 +299,10 @@ func _update_aim() -> void:
     var vertical: float = Input.get_axis(&"move_down", &"move_up")
     var directional: bool = directional_attacks and absf(vertical) > 0.5
 
-    _target = null
-    if not directional:
-        _target = _find_screen_target(body_radius + _current_reach_length())
+    if directional:
+        _target = null
+    else:
+        _target = _select_target(body_radius + _current_reach_length())
     if _target != null:
         _aim_dir = (_target.global_position - global_position).normalized()
         return
@@ -315,31 +316,66 @@ func _update_aim() -> void:
     _aim_dir = (Basis(Vector3.UP, _facing_yaw) * Basis(Vector3.RIGHT, pitch)) * Vector3.FORWARD
 
 
-## 选投影离屏幕中心最近、且伪足够得着的目标。
-## 按屏幕距离而不是按身体朝向挑：玩家用镜头"看"谁，就是想打谁
-func _find_screen_target(reach: float) -> Node3D:
+## 选投影离准星最近、且伪足够得着的目标，但带粘性：
+## 以前每帧从零重选，别的目标只要近 1 像素就抢走选择，这就是"锁定乱跳"的直接原因。
+## 现在：当前目标的距离打折（新目标必须明显更近才抢得走）；刚换目标后有最短锁定时间；
+## 蓄力中完全不换（不然蓄到一半目标跳走，这一下就打歪了）；扑过来的敌人优先
+func _select_target(reach: float) -> Node3D:
     var cam: Camera3D = get_viewport().get_camera_3d()
     if cam == null:
         return null
     var screen: Vector2 = get_viewport().get_visible_rect().size
-    var center: Vector2 = get_aim_screen_point()
-    var best_px: float = screen.y * target_screen_radius
+    var max_px: float = screen.y * target_screen_radius
     var max_dist: float = reach + pod_tip_radius + target_reach_slack
-    var best: Node3D = null
+    var preset: Dictionary = LOCK_PRESETS[clampi(lock_preset, 0, LOCK_PRESETS.size() - 1)]
+
+    var current: Node3D = _target
+    var current_score: float = -1.0
+    if current != null and is_instance_valid(current) and current.is_in_group(&"target"):
+        # 已锁定的目标用放宽后的范围判定，避免在射程/屏幕边界上反复进出
+        current_score = _target_score(cam, current,
+            max_dist + keep_extra_range, max_px * keep_screen_radius_scale)
+    if current_score < 0.0:
+        current = null
+    elif _pod_state == PodState.CHARGING or _target_hold_timer > 0.0:
+        return current
+
+    var best: Node3D = current
+    var best_score: float = INF
+    if current != null:
+        best_score = current_score * float(preset["keep_bias"])
     for node: Node in get_tree().get_nodes_in_group(&"target"):
         var t := node as Node3D
-        if t == null:
+        if t == null or t == current:
             continue
-        var dist: float = t.global_position.distance_to(global_position)
-        if dist < 0.001 or dist > max_dist:
-            continue
-        if cam.is_position_behind(t.global_position):
-            continue
-        var px: float = cam.unproject_position(t.global_position).distance_to(center)
-        if px < best_px:
-            best_px = px
+        var score: float = _target_score(cam, t, max_dist, max_px)
+        if score >= 0.0 and score < best_score:
+            best_score = score
             best = t
+    if best != current:
+        _target_hold_timer = float(preset["min_hold"])
     return best
+
+
+## 目标的屏幕距离（越小越优先），不合格返回 -1。正在前摇/冲刺的敌人打折
+func _target_score(cam: Camera3D, t: Node3D, max_dist: float, max_px: float) -> float:
+    var dist: float = t.global_position.distance_to(global_position)
+    if dist < 0.001 or dist > max_dist:
+        return -1.0
+    if cam.is_position_behind(t.global_position):
+        return -1.0
+    var px: float = cam.unproject_position(t.global_position).distance_to(get_aim_screen_point())
+    if px > max_px:
+        return -1.0
+    if t.has_method(&"is_threatening") and t.call(&"is_threatening"):
+        px *= threat_bias
+    return px
+
+
+## 给 HUD 显示用的一行大白话
+func get_preset_hint() -> String:
+    var preset: Dictionary = LOCK_PRESETS[clampi(lock_preset, 0, LOCK_PRESETS.size() - 1)]
+    return "锁定：%s（F2 / 十字键上 切换）" % preset["name"]
 
 
 func has_target() -> bool:
@@ -416,23 +452,14 @@ func _update_pseudopod(delta: float) -> void:
 
         PodState.EXTENDING:
             var speed: float = lerpf(extend_speed_short, extend_speed_long, _attack_charge)
-            var next_length: float = move_toward(_pod_length, _target_length, speed * delta)
-            if _attack_is_swing:
-                # 挥扫的伸出阶段相当于抬手，不判定；伸到位后才开始扫
-                _pod_length = next_length
-                if _pod_length >= _target_length:
-                    _pod_state = PodState.SWEEPING
-                    # 先检查起始姿态：伸到位时可能已经压在目标身上
-                    if _sweep_swing_to(0.0):
-                        _enter_hold()
-            else:
-                var hit: Dictionary = _sweep_tip(_pod_length, next_length)
-                if not hit.is_empty():
-                    _on_thrust_hit(hit)
-                else:
-                    _pod_length = next_length
-                    if _pod_length >= _target_length:
-                        _enter_hold()
+            # 伸出阶段相当于抬手，不判定；伸到位后才开始扫
+            _pod_length = move_toward(_pod_length, _target_length, speed * delta)
+            if _pod_length >= _target_length:
+                _pod_state = PodState.SWEEPING
+                _play_sfx(&"swing", lerpf(1.15, 0.8, _attack_charge))
+                # 先检查起始姿态：伸到位时可能已经压在目标身上
+                if _sweep_swing_to(0.0):
+                    _enter_hold()
 
         PodState.SWEEPING:
             var next_t: float = 1.0
@@ -479,56 +506,21 @@ func _release() -> void:
     if _target != null:
         _face_toward(_attack_dir)
     _pod_length = 0.0
-    _attack_is_swing = attack_shape == AttackShape.SWING
-    if _attack_is_swing:
-        _swing_axis = _swing_axis_for(_attack_dir)
-        var half: float = _swing_half_arc(_attack_charge)
-        _swing_start = half * _swing_side
-        _swing_end = -half * _swing_side
-        _swing_duration = lerpf(swing_time_short, swing_time_long, _attack_charge)
-        _swing_t = 0.0
-        _swing_hit_ids.clear()
-        if swing_alternate:
-            _swing_side = -_swing_side
+    _swing_axis = _swing_axis_for(_attack_dir)
+    var half: float = _swing_half_arc(_attack_charge)
+    _swing_start = half * _swing_side
+    _swing_end = -half * _swing_side
+    _swing_duration = lerpf(swing_time_short, swing_time_long, _attack_charge)
+    _swing_t = 0.0
+    _swing_hit_ids.clear()
+    if swing_alternate:
+        _swing_side = -_swing_side
     _pod_state = PodState.EXTENDING
 
 
 func _enter_hold() -> void:
     _hold_timer = lerpf(hold_time_short, hold_time_long, _attack_charge)
     _pod_state = PodState.HOLDING
-
-
-## 用球形扫掠检测伪足尖端这一帧走过的路径，避免伸得快时穿过目标
-func _sweep_tip(from_length: float, to_length: float) -> Dictionary:
-    if to_length <= from_length:
-        return {}
-    var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
-    var from: Vector3 = global_position + _attack_dir * (body_radius + from_length)
-    var motion: Vector3 = _attack_dir * (to_length - from_length)
-
-    _tip_shape.radius = pod_tip_radius
-    _tip_query.collision_mask = hit_mask
-    _tip_query.transform = Transform3D(Basis.IDENTITY, from)
-    _tip_query.motion = motion
-    var fractions: PackedFloat32Array = space.cast_motion(_tip_query)
-    if fractions[1] >= 1.0:
-        return {}
-
-    var unsafe: float = fractions[1]
-    _tip_query.transform = Transform3D(Basis.IDENTITY, from + motion * unsafe)
-    _tip_query.motion = Vector3.ZERO
-    var results: Array[Dictionary] = space.intersect_shape(_tip_query, 1)
-    if results.is_empty():
-        return {}
-    var hit: Dictionary = results[0]
-    hit["length"] = lerpf(from_length, to_length, fractions[0])
-    return hit
-
-
-func _on_thrust_hit(hit: Dictionary) -> void:
-    _pod_length = hit["length"]
-    _deal_hit(hit.get("collider"), _attack_dir)
-    _enter_hold()
 
 
 func _deal_hit(target: Object, direction: Vector3) -> void:
@@ -538,6 +530,7 @@ func _deal_hit(target: Object, direction: Vector3) -> void:
         target.call(&"take_hit", _attack_charge, direction)
     if target is Node:
         hit_landed.emit(target, _attack_charge)
+    _play_sfx(&"hit", lerpf(1.2, 0.75, _attack_charge))
     # 按路径取 autoload 而不是直接写 HitStop：单脚本语法检查不加载 autoload，
     # 直接引用会让 --check-only 报"找不到标识符"
     var hit_stop: Node = get_node_or_null(^"/root/HitStop")
@@ -564,11 +557,9 @@ func _swing_half_arc(charge: float) -> float:
     return deg_to_rad(lerpf(swing_arc_short_deg, swing_arc_long_deg, charge)) * 0.5
 
 
-## 伪足当前实际指向。挥扫时随进度转动，直刺时就是攻击方向
+## 伪足当前实际指向，随挥扫进度转动
 func _pod_dir() -> Vector3:
-    if _attack_is_swing:
-        return _attack_dir.rotated(_swing_axis, lerpf(_swing_start, _swing_end, _swing_t))
-    return _attack_dir
+    return _attack_dir.rotated(_swing_axis, lerpf(_swing_start, _swing_end, _swing_t))
 
 
 ## 把挥扫推进到 to_t，按角度步长逐段检测，防止一帧扫过头跳过目标。
@@ -647,6 +638,7 @@ func take_damage(amount: float, knockback: Vector3) -> bool:
     _hurt_flash_timer = hurt_flash_time
     # 直接替换速度而不是叠加：被打中那一刻原来的移动应该被打断
     velocity = knockback
+    _play_sfx(&"hurt", 1.0)
 
     var cam := get_viewport().get_camera_3d() as FollowCamera
     if cam != null:
@@ -660,6 +652,13 @@ func take_damage(amount: float, knockback: Vector3) -> bool:
         defeated.emit()
     health_changed.emit(health, max_health)
     return true
+
+
+## 音效走 autoload，按路径取，理由同 HitStop
+func _play_sfx(sound: StringName, pitch: float) -> void:
+    var sfx: Node = get_node_or_null(^"/root/Sfx")
+    if sfx != null:
+        sfx.call(&"play", sound, pitch)
 
 
 ## 方向攻击下升降键在出招期间被借去定方向，身体不应该同时往上飘
@@ -713,16 +712,13 @@ func _update_visuals() -> void:
         _target_marker.global_position = _target.global_position + Vector3.UP * target_marker_height
 
     var charging: bool = _pod_state == PodState.CHARGING
-    var swing_selected: bool = attack_shape == AttackShape.SWING
 
     # 蓄力的可读性靠剪影：膜朝伪足将要伸出的方向鼓起、越蓄越长。
-    # 挥扫时鼓在起点那一侧，顺便预告这一下从哪边扫过来
+    # 鼓在挥扫起点那一侧，顺便预告这一下从哪边扫过来
     _bulge_mesh.visible = charging
     if _bulge_mesh.visible:
         var c: float = _current_charge()
-        var bulge_dir: Vector3 = _aim_dir
-        if swing_selected:
-            bulge_dir = _aim_dir.rotated(_swing_axis_for(_aim_dir), _swing_half_arc(c) * _swing_side)
+        var bulge_dir: Vector3 = _aim_dir.rotated(_swing_axis_for(_aim_dir), _swing_half_arc(c) * _swing_side)
         var width: float = lerpf(0.35, 0.6, c)
         var length: float = lerpf(0.4, bulge_max_stretch, c)
         _bulge_mesh.transform = Transform3D(
@@ -730,17 +726,9 @@ func _update_visuals() -> void:
             bulge_dir * (body_radius * 0.6 + length * 0.25)
         )
 
-    _swing_preview.visible = show_reach_preview and charging and swing_selected
+    _swing_preview.visible = show_reach_preview and charging
     if _swing_preview.visible:
         _draw_swing_preview(_current_reach_length(), _current_charge())
-
-    _reach_preview.visible = show_reach_preview and charging and not swing_selected
-    if _reach_preview.visible:
-        var reach: float = _current_reach_length()
-        _reach_preview.transform = Transform3D(
-            _basis_y_to(_aim_dir) * Basis.from_scale(Vector3(1.0, reach, 1.0)),
-            _aim_dir * (body_radius + reach * 0.5)
-        )
 
     _pod_mesh.visible = not idle_or_charging and _pod_length > 0.0
     if _pod_mesh.visible:
@@ -792,8 +780,7 @@ static func _basis_y_to(dir: Vector3) -> Basis:
 func get_debug_text() -> String:
     var state_name: String = PodState.keys()[_pod_state]
     var charge: float = _current_charge() if _pod_state == PodState.CHARGING else _attack_charge
-    return "形态: %s   目标: %s   上下: [%s镜头] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
-        "挥扫" if attack_shape == AttackShape.SWING else "直刺",
+    return "目标: %s   上下: [%s镜头] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
         str(_target.name) if _target != null else "无",
         "√" if vertical_from_camera else "×",
         "√" if directional_attacks else "×",

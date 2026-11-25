@@ -7,7 +7,7 @@
 [ext_resource type="Script" uid="uid://cl3gsn2gl344q" path="res://scripts/ui/debug_overlay.gd" id="5_overlay"]
 [ext_resource type="Script" uid="uid://bdoq8fiern376" path="res://scripts/ui/crosshair.gd" id="6_crosshair"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="7_enemy"]
-[ext_resource type="Script" path="res://scripts/ui/health_bar.gd" id="8_health"]
+[ext_resource type="Script" uid="uid://cpmi0c5jtvhbt" path="res://scripts/ui/health_bar.gd" id="8_health"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 1

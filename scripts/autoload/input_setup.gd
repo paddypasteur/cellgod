@@ -29,6 +29,8 @@ func _enter_tree() -> void:
     _add_action(&"camera_down", [_joy_axis(JOY_AXIS_RIGHT_Y, 1.0)])
 
     _add_action(&"toggle_debug", [_key(KEY_F1), _joy_button(JOY_BUTTON_BACK)])
+    # A/B 预设切换：给开发者当场对比用
+    _add_action(&"cycle_preset", [_key(KEY_F2), _joy_button(JOY_BUTTON_DPAD_UP)])
 
     _add_action(&"pseudopod", [_mouse(MOUSE_BUTTON_LEFT), _joy_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)])
 

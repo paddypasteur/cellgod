@@ -1,6 +1,7 @@
 class_name HealthBar
 extends Control
 ## 屏幕底部的玩家血条。白盒阶段直接自绘，不引入主题和贴图。
+## 血条下面再画一行当前 A/B 预设，调试面板关掉时开发者也知道自己在试哪一组。
 
 @export var player: Player
 
@@ -18,11 +19,10 @@ func _ready() -> void:
     set_anchors_preset(Control.PRESET_FULL_RECT)
     mouse_filter = Control.MOUSE_FILTER_IGNORE
     resized.connect(queue_redraw)
-    if player != null:
-        player.health_changed.connect(_on_health_changed)
 
 
-func _on_health_changed(_current: float, _maximum: float) -> void:
+func _process(_delta: float) -> void:
+    # 预设随时可能被切换，血量也会变，每帧重画最省事，开销可以忽略
     queue_redraw()
 
 
@@ -36,3 +36,5 @@ func _draw() -> void:
     var text: String = "HP %d / %d" % [ceili(player.health), ceili(player.max_health)]
     draw_string(ThemeDB.fallback_font, pos + Vector2(6.0, bar_size.y - 4.0), text,
         HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, color_text)
+    draw_string(ThemeDB.fallback_font, pos + Vector2(0.0, bar_size.y + font_size + 6.0),
+        player.get_preset_hint(), HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, color_text)

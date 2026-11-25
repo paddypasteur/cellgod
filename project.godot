@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 
 InputSetup="*res://scripts/autoload/input_setup.gd"
 HitStop="*res://scripts/autoload/hit_stop.gd"
+Sfx="*res://scripts/autoload/sfx.gd"
 
 [layer_names]
 

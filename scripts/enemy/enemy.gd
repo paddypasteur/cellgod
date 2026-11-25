@@ -46,6 +46,8 @@ const STATE_LABELS: PackedStringArray = ["接近", "前摇", "攻击", "硬直",
 ## 两次攻击之间的间隔（秒），每次在范围内随机，免得几只敌人同时出手
 @export var attack_cooldown_min: float = 1.5
 @export var attack_cooldown_max: float = 3.5
+## 同一时间最多几只敌人处于前摇或冲刺。0 = 不限制（默认：上下夹击正是要考的题，先不消掉）
+@export var max_concurrent_attackers: int = 0
 ## 前摇时长（秒）。玩家靠它读招
 @export var windup_time: float = 0.8
 ## 前摇进行到多少比例时锁定冲刺方向。之后玩家移动就能躲开
@@ -128,6 +130,11 @@ func get_state_label() -> String:
     return STATE_LABELS[_state]
 
 
+## 正在前摇或冲刺。玩家索敌时优先选这种：扑过来的那只最该被打
+func is_threatening() -> bool:
+    return _state == State.WINDUP or _state == State.ATTACK
+
+
 func _physics_process(delta: float) -> void:
     if _player == null:
         _find_player()
@@ -143,7 +150,11 @@ func _physics_process(delta: float) -> void:
             _cooldown -= delta
             _steer_to_post(delta, 1.0)
             if _cooldown <= 0.0 and _in_engage_range():
-                _enter(State.WINDUP)
+                if _attack_slot_free():
+                    _enter(State.WINDUP)
+                else:
+                    # 名额被占就稍等再试，加随机避免几只同时醒来又挤在一起
+                    _cooldown = randf_range(0.2, 0.6)
 
         State.WINDUP:
             _steer_to_post(delta, windup_move_scale)
@@ -186,6 +197,10 @@ func _enter(state: State) -> void:
         State.WINDUP:
             _state_timer = windup_time
             _attack_dir = _dir_to_player()
+            # 3D 定位音效：在屏幕外起手的敌人，玩家也能听出它在上面还是下面
+            var sfx: Node = get_node_or_null(^"/root/Sfx")
+            if sfx != null:
+                sfx.call(&"play_at", &"windup", global_position, windup_time)
         State.ATTACK:
             _lunge_travelled = 0.0
             _attack_landed = false
@@ -228,6 +243,17 @@ func _steer_to_post(delta: float, speed_scale: float) -> void:
 func _in_engage_range() -> bool:
     var dist: float = global_position.distance_to(_player.global_position)
     return absf(dist - preferred_distance) <= engage_tolerance
+
+
+func _attack_slot_free() -> bool:
+    if max_concurrent_attackers <= 0:
+        return true
+    var busy: int = 0
+    for node: Node in get_tree().get_nodes_in_group(&"enemy"):
+        var e := node as Enemy
+        if e != null and e != self and e.is_threatening():
+            busy += 1
+    return busy < max_concurrent_attackers
 
 
 func _windup_progress() -> float:
