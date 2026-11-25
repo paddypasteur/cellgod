@@ -18,6 +18,10 @@ extends Camera3D
         _pitch_deg = value
 ## 注视点比主角高多少。越大主角越靠画面下方，上方视野越多
 @export var look_height_offset: float = 0.8
+## 肩后偏移（米）。镜头和注视点一起沿镜头右方平移，视线方向不变，
+## 主角因此偏到画面一侧，朝前打的伪足不再被自己的身体挡住。
+## 正数 = 镜头在主角右后方（主角偏画面左侧）；负数反之；0 = 正后方
+@export var shoulder_offset: float = 0.0
 
 @export_group("跟随")
 ## 位置跟随响应。越大越紧，越小越"拖"
@@ -107,6 +111,7 @@ func _update_yaw(delta: float) -> void:
 func _apply() -> void:
     var pitch: float = deg_to_rad(clampf(_pitch_deg, -80.0, 80.0))
     var orbit: Basis = Basis(Vector3.UP, _yaw) * Basis(Vector3.RIGHT, pitch)
-    var look_point: Vector3 = _pivot + Vector3.UP * look_height_offset
+    # orbit.x 是镜头右方；绕 X 轴的俯仰不改变它，所以它始终水平，平移不会带来 roll
+    var look_point: Vector3 = _pivot + Vector3.UP * look_height_offset + orbit.x * shoulder_offset
     global_position = look_point + orbit * Vector3(0.0, 0.0, distance)
     look_at(look_point, Vector3.UP)
