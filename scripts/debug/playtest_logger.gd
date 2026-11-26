@@ -10,6 +10,10 @@ extends Node
 ##             （不能用命中那一刻的高度：冲刺已经扑到玩家身边，永远接近 0）
 ##   windup    敌人开始起手；on_screen = 起手那一刻是否在镜头视野内
 ##   sample    每 0.5 秒记一次玩家位置，用来算上下移动的幅度
+##   bounce    玩家弹射；elev_deg = 朝目标方向的仰角；info = 本链第几次弹射
+##   strike    弹射到达后的自动轻击结束；info = 1 打中 / 0 落空（经常落空 = 到达时是懵的）
+##   chain     一条连招链结束；info = "打中几下/弹射几次/结束原因"
+## preset 列 = 当时的 A/B 预设字母（弹射窗口 A 短 / B 长）
 
 @export var player: Player
 ## 关掉就不写文件
@@ -30,6 +34,9 @@ var dodge_up: int = 0
 var dodge_down: int = 0
 var dodge_level: int = 0
 var saved_count: int = 0
+var bounce_count: int = 0
+var chain_count: int = 0
+var longest_chain: int = 0
 
 
 func _ready() -> void:
@@ -47,10 +54,13 @@ func _ready() -> void:
     if _file == null:
         enabled = false
         return
-    _file.store_line("t,event,x,y,z,elev_deg,rel_y,on_screen,threats")
+    _file.store_line("t,event,x,y,z,elev_deg,rel_y,on_screen,threats,preset,info")
     print("试玩记录写入 ", ProjectSettings.globalize_path(path))
     player.dodged.connect(_on_dodged)
     player.dodge_saved.connect(_on_dodge_saved)
+    player.bounced.connect(_on_bounced)
+    player.bounce_strike.connect(_on_bounce_strike)
+    player.chain_ended.connect(_on_chain_ended)
     player.health_changed.connect(_on_health_changed)
     _last_health = player.health
 
@@ -88,6 +98,22 @@ func _on_dodged(direction: Vector3) -> void:
     else:
         dodge_level += 1
     _write("dodge", elev, _nearest_threat_rel_y(), -1)
+
+
+func _on_bounced(direction: Vector3, chain_index: int) -> void:
+    bounce_count += 1
+    var elev: float = rad_to_deg(asin(clampf(direction.y, -1.0, 1.0)))
+    _write("bounce", elev, NAN, -1, str(chain_index))
+
+
+func _on_bounce_strike(hit: bool) -> void:
+    _write("strike", 0.0, NAN, -1, "1" if hit else "0")
+
+
+func _on_chain_ended(hits: int, bounces: int, reason: String) -> void:
+    chain_count += 1
+    longest_chain = maxi(longest_chain, hits)
+    _write("chain", 0.0, NAN, -1, "%d/%d/%s" % [hits, bounces, reason])
 
 
 func _on_dodge_saved() -> void:
@@ -136,15 +162,17 @@ func _threat_count() -> int:
     return n
 
 
-func _write(event: String, elev: float, rel_y: float, on_screen: int) -> void:
+func _write(event: String, elev: float, rel_y: float, on_screen: int, info: String = "") -> void:
     if _file == null:
         return
     var p: Vector3 = player.global_position
-    _file.store_line("%.2f,%s,%.2f,%.2f,%.2f,%.1f,%s,%s,%d" % [
+    _file.store_line("%.2f,%s,%.2f,%.2f,%.2f,%.1f,%s,%s,%d,%s,%s" % [
         _time, event, p.x, p.y, p.z, elev,
         "" if is_nan(rel_y) else "%.2f" % rel_y,
         "" if on_screen < 0 else str(on_screen),
         _threat_count(),
+        player.get_ab_preset_letter(),
+        info,
     ])
     # 每行都落盘：试玩可能直接关窗口，不能指望正常退出时才写
     _file.flush()
@@ -152,7 +180,5 @@ func _write(event: String, elev: float, rel_y: float, on_screen: int) -> void:
 
 ## 调试面板用
 func get_summary() -> String:
-    if dodge_count == 0:
-        return "闪避 0 次"
-    return "闪避 %d 次（水平 %d / 往上 %d / 往下 %d）  靠无敌躲掉 %d 次" % [
-        dodge_count, dodge_level, dodge_up, dodge_down, saved_count]
+    return "闪避 %d 次（水平 %d / 往上 %d / 往下 %d）  靠无敌躲掉 %d 次   弹射 %d 次  连招 %d 条（最长 %d 下）" % [
+        dodge_count, dodge_level, dodge_up, dodge_down, saved_count, bounce_count, chain_count, longest_chain]

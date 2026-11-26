@@ -67,6 +67,35 @@ def main() -> None:
                 label = f"{b - 10:+4d}~{b:+d}"
             print(f"    {label:>10}° {'█' * counts[b]} {counts[b]}")
     print(f"靠无敌时间躲掉 {len(events('saved'))} 次")
+    duration_min = max(float(r["t"]) for r in rows) / 60.0
+    print(f"闪避频率 {len(dodges) / max(duration_min, 0.01):.1f} 次/分钟（弹射上线后骤减 = 弹射太安全）")
+
+    # ---- 连招弹射（2026-11-26 起的记录才有）
+    bounces = events("bounce")
+    chains = events("chain")
+    strikes = events("strike")
+    if bounces or chains:
+        print("—— 连招弹射 ——")
+        for letter, label in (("A", "A 短窗口"), ("B", "B 长窗口")):
+            sub_chains = [r for r in chains if r.get("preset") == letter]
+            secs = sum(r["event"] == "sample" and r.get("preset") == letter for r in rows) * 0.5
+            if not sub_chains and secs == 0:
+                continue
+            lengths = Counter(int(r["info"].split("/")[0]) for r in sub_chains)
+            reasons = Counter(r["info"].split("/")[2] for r in sub_chains)
+            sub_dodges = sum(r["event"] == "dodge" and r.get("preset") == letter for r in rows)
+            print(f"  [{label}] 约 {secs:.0f} 秒，连招链 {len(sub_chains)} 条；"
+                  f"链长（打中几下）{dict(sorted(lengths.items()))}；结束原因 {dict(reasons)}；"
+                  f"闪避 {sub_dodges / max(secs / 60.0, 0.01):.1f} 次/分钟")
+        b_elev = [float(r["elev_deg"]) for r in bounces]
+        if b_elev:
+            up = sum(e >= 20 for e in b_elev)
+            down = sum(e <= -20 for e in b_elev)
+            print(f"  弹射 {len(b_elev)} 次：水平 {len(b_elev) - up - down} / 往上 {up} / 往下 {down}"
+                  f"（垂直占 {100 * (up + down) / len(b_elev):.0f}%）")
+        if strikes:
+            hit = sum(r["info"] == "1" for r in strikes)
+            print(f"  弹射到达后的自动轻击：{hit}/{len(strikes)} 打中（经常落空 = 到达时是懵的）")
 
     hurt = events("hurt")
     print(f"受击 {len(hurt)} 次，攻击者起手位置：{dict(Counter(layer(r['rel_y']) for r in hurt))}")

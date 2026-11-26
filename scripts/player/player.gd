@@ -13,8 +13,20 @@ signal defeated
 signal dodged(direction: Vector3)
 ## 一次攻击正好落在闪避无敌时间里被躲掉（每次闪避最多发一次）
 signal dodge_saved
+## 发起一次弹射。direction = 朝目标的方向（记录仰角用），chain_index = 这是本条链的第几次弹射
+signal bounced(direction: Vector3, chain_index: int)
+## 弹射到达后的自动轻击结束，hit = 有没有打中
+signal bounce_strike(hit: bool)
+## 一条连招链结束。hits = 链里打中了几下（含开链那一下），bounces = 弹射了几次
+signal chain_ended(hits: int, bounces: int, reason: String)
 
 enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
+
+## 弹射窗口长度的 A/B 预设，F2 / 十字键上切换。只把这一个给开发者（策划规格第 8 条）
+const BOUNCE_PRESETS: Array[Dictionary] = [
+    {"name": "A 短", "window": 0.25},
+    {"name": "B 长", "window": 0.5},
+]
 
 @export_group("移动")
 ## 最大悬浮速度（米/秒）
@@ -147,6 +159,28 @@ enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 提前按下的闪避记住多久（秒）
 @export var dodge_buffer_time: float = 0.15
 
+@export_group("连招弹射")
+## 当前弹射窗口预设（见 BOUNCE_PRESETS）
+@export var bounce_preset: int = 0
+## 在输入方向多大的锥形里找下一个目标（半角，度）。上下和水平一视同仁
+@export_range(5.0, 90.0) var bounce_cone_deg: float = 50.0
+## 多远以内的敌人能被弹过去（米）
+@export var bounce_range: float = 12.0
+## 弹射飞行速度（米/秒）。比闪避（约 20）略快，弹射是进攻性的突进
+@export var bounce_speed: float = 24.0
+## 离目标中心多近算到达（米），到达后自动出一次轻击。要在轻击够得着的范围内
+@export var bounce_arrive_distance: float = 2.2
+## 到达点往目标侧面偏多少（0 = 沿飞行方向直接停在目标前，1 = 完全停在目标侧面）。
+## 不偏的话，从正上方俯冲下去会停在目标正上方，镜头从斜上方看时主角正好挡住目标、两者叠成一团
+## （2026-11-26 截图确认）。侧面 = 相对镜头的左右，取玩家飞来的那一侧
+@export_range(0.0, 1.0) var bounce_arrive_side_weight: float = 0.8
+## 一条链最多弹射几次
+@export var bounce_max_chain: int = 3
+## 方向输入至少多大才算"指了方向"（0..1）。小于它按攻击 = 普通原地接招
+@export_range(0.0, 1.0) var bounce_input_threshold: float = 0.3
+## 弹射窗口开着时身体染上这个颜色，提示"现在可以弹"
+@export var bounce_window_tint: Color = Color(1.0, 0.85, 0.3)
+
 @export_group("生命与受击")
 @export var max_health: float = 100.0
 ## 受击后的无敌时间（秒），防止同一下攻击连续扣血
@@ -188,6 +222,23 @@ var _dodge_buffer: float = 0.0
 var _iframe_timer: float = 0.0
 var _dodge_dir: Vector3 = Vector3.FORWARD
 var _dodge_saved_once: bool = false
+
+## 弹射窗口剩余时间（游戏时间：命中定格冻结物理帧，所以定格不会吃掉窗口）
+var _bounce_window: float = 0.0
+var _bouncing: bool = false
+var _bounce_target: Node3D = null
+var _bounce_timer: float = 0.0
+## 到达点相对目标的偏移，起跳时算好，飞行中跟着目标移动
+var _bounce_offset: Vector3 = Vector3.ZERO
+## 当前这一击是弹射到达后的自动轻击
+var _auto_attack: bool = false
+## 当前这一击是否已经打中过东西（第一次打中时开窗口）
+var _attack_hit_any: bool = false
+var _chain_active: bool = false
+var _chain_hits: int = 0
+var _chain_bounces: int = 0
+## 本条链打过的敌人，不能再弹向它们（逼玩家规划路线）
+var _chain_visited: Array[int] = []
 
 var _pod_state: PodState = PodState.IDLE
 var _charge_time: float = 0.0
@@ -259,6 +310,8 @@ func _unhandled_input(event: InputEvent) -> void:
         _buffer_timer = input_buffer_time
     elif event.is_action_pressed(&"dodge"):
         _dodge_buffer = dodge_buffer_time
+    elif event.is_action_pressed(&"cycle_preset"):
+        bounce_preset = (bounce_preset + 1) % BOUNCE_PRESETS.size()
 
 
 func _physics_process(delta: float) -> void:
@@ -269,8 +322,14 @@ func _physics_process(delta: float) -> void:
     _dodge_cooldown_timer = maxf(_dodge_cooldown_timer - delta, 0.0)
     _dodge_buffer = maxf(_dodge_buffer - delta, 0.0)
     _iframe_timer = maxf(_iframe_timer - delta, 0.0)
+    _bounce_timer = maxf(_bounce_timer - delta, 0.0)
+    if _bounce_window > 0.0:
+        _bounce_window -= delta
+        if _bounce_window <= 0.0 and not _bouncing:
+            _end_chain("timeout")
     _update_facing(delta)
     _update_aim()
+    _try_start_bounce()
     _try_start_dodge()
     _update_pseudopod(delta)
     _update_movement(delta)
@@ -454,7 +513,7 @@ func _update_pseudopod(delta: float) -> void:
     match _pod_state:
         PodState.IDLE:
             # 闪避途中不起手，按键留在缓冲里，闪完立刻接
-            if _buffer_timer > 0.0 and _dodge_timer <= 0.0:
+            if _buffer_timer > 0.0 and _dodge_timer <= 0.0 and not _bouncing:
                 _buffer_timer = 0.0
                 _charge_time = 0.0
                 if snap_facing_on_attack:
@@ -523,10 +582,21 @@ func _current_reach_length() -> float:
 
 
 func _release() -> void:
-    _attack_charge = _current_charge()
+    _launch_attack(_current_charge(), _aim_dir, false)
+
+
+## 发出一击。auto = 弹射到达后的自动轻击：它属于当前连招链；玩家自己出的招则开始新的链
+func _launch_attack(charge: float, direction: Vector3, auto: bool) -> void:
+    if not auto:
+        # 窗口里不指方向按攻击 = 原地接招，按规格这不是弹射，旧链到此结束
+        _end_chain("followup")
+    _auto_attack = auto
+    _attack_hit_any = false
+    _bounce_window = 0.0
+    _attack_charge = charge
     _target_length = lerpf(pod_min_length, pod_max_length, _attack_charge)
-    _attack_dir = _aim_dir
-    if _target != null:
+    _attack_dir = direction
+    if _target != null or auto:
         _face_toward(_attack_dir)
     _pod_length = 0.0
     _swing_axis = _swing_axis_for(_attack_dir)
@@ -544,6 +614,12 @@ func _release() -> void:
 func _enter_hold() -> void:
     _hold_timer = lerpf(hold_time_short, hold_time_long, _attack_charge)
     _pod_state = PodState.HOLDING
+    # 挥扫结束：弹射到达后的那一击到这里就知道有没有打中
+    if _auto_attack:
+        _auto_attack = false
+        bounce_strike.emit(_attack_hit_any)
+        if not _attack_hit_any:
+            _end_chain("miss")
 
 
 func _deal_hit(target: Object, direction: Vector3) -> void:
@@ -553,6 +629,7 @@ func _deal_hit(target: Object, direction: Vector3) -> void:
         target.call(&"take_hit", _attack_charge, direction)
     if target is Node:
         hit_landed.emit(target, _attack_charge)
+    _on_chain_hit(target)
     _play_sfx(&"hit", lerpf(1.2, 0.75, _attack_charge))
     # 按路径取 autoload 而不是直接写 HitStop：单脚本语法检查不加载 autoload，
     # 直接引用会让 --check-only 报"找不到标识符"
@@ -625,7 +702,9 @@ func _check_pod_overlap() -> bool:
 # ---------------------------------------------------------------- 移动
 
 func _update_movement(delta: float) -> void:
-    if _dodge_timer > 0.0:
+    if _bouncing:
+        _update_bounce_flight()
+    elif _dodge_timer > 0.0:
         _dodge_timer -= delta
         velocity = _dodge_dir * (dodge_distance / maxf(dodge_duration, 0.01))
         if _dodge_timer <= 0.0:
@@ -656,10 +735,157 @@ func _move_input_world(vertical_scale: float) -> Vector3:
     return right * planar.x - fwd * planar.y + Vector3.UP * vertical * vertical_scale
 
 
+# ---------------------------------------------------------------- 连招弹射
+#
+# 普通连招是时间上的序列，弹射连招是空间上的序列：命中后指一个方向，把自己甩向那边的下一个敌人，
+# 到达自动出一次轻击，打中再开下一个窗口。在球形战场里"打谁"同时决定"我下一秒在哪一层"。
+# 风险结构：只有命中才开窗口（打空照样走完收回挨罚）；弹射没有无敌（否则它严格优于闪避）。
+
+
+## 每一击第一次打中东西时开窗口；同一击扫中多个只算链里的一下，但它们都记为"打过了"
+func _on_chain_hit(target: Object) -> void:
+    if target != null:
+        _chain_visited.append(target.get_instance_id())
+    if _attack_hit_any:
+        return
+    _attack_hit_any = true
+    if not _chain_active:
+        _chain_active = true
+        _chain_hits = 0
+        _chain_bounces = 0
+        # 刚打中的目标在上面已经记入，这里只清掉更早的
+        var keep: int = target.get_instance_id() if target != null else 0
+        _chain_visited = [keep]
+    _chain_hits += 1
+    if _chain_bounces < bounce_max_chain:
+        _bounce_window = float(_current_bounce_preset()["window"])
+    else:
+        _end_chain("max")
+
+
+## 窗口内 有方向输入 + 按攻击 + 锥形里有没打过的敌人 → 弹射。
+## 任何一条不满足都不弹，攻击键留在缓冲里走原来的"原地接招"，玩家永远不会被甩到不想去的地方
+func _try_start_bounce() -> void:
+    if _bounce_window <= 0.0 or _bouncing or _buffer_timer <= 0.0 or _stun_timer > 0.0:
+        return
+    var wish: Vector3 = _move_input_world(1.0)
+    if wish.length() < bounce_input_threshold:
+        return
+    var target: Node3D = _find_bounce_target(wish.normalized())
+    if target == null:
+        return
+    _buffer_timer = 0.0
+    _bounce_window = 0.0
+    # 取消剩下的停留和收回：这正是弹射的价值，否则链条中间有停顿
+    _pod_state = PodState.IDLE
+    _pod_length = 0.0
+    _bouncing = true
+    _bounce_target = target
+    _bounce_timer = bounce_range / maxf(bounce_speed, 0.1) + 0.3
+    _chain_bounces += 1
+    var dir: Vector3 = (target.global_position - global_position).normalized()
+    _bounce_offset = _compute_arrive_offset(target)
+    _face_toward(dir)
+    _play_sfx(&"swing", 1.4)
+    bounced.emit(dir, _chain_bounces)
+
+
+## 锥形内找目标；多个时用准星当裁判（复用索敌判据），没在屏幕上的按夹角排在后面
+func _find_bounce_target(dir: Vector3) -> Node3D:
+    var cam: Camera3D = get_viewport().get_camera_3d()
+    var cos_limit: float = cos(deg_to_rad(bounce_cone_deg))
+    var best: Node3D = null
+    var best_score: float = INF
+    for node: Node in get_tree().get_nodes_in_group(&"target"):
+        var t := node as Node3D
+        if t == null or _chain_visited.has(t.get_instance_id()):
+            continue
+        var to: Vector3 = t.global_position - global_position
+        var dist: float = to.length()
+        if dist < 0.001 or dist > bounce_range:
+            continue
+        var cos_angle: float = dir.dot(to / dist)
+        if cos_angle < cos_limit:
+            continue
+        var score: float = 100000.0 + (1.0 - cos_angle) * 1000.0
+        if cam != null and not cam.is_position_behind(t.global_position):
+            score = cam.unproject_position(t.global_position).distance_to(get_aim_screen_point())
+        if score < best_score:
+            best_score = score
+            best = t
+    return best
+
+
+func _update_bounce_flight() -> void:
+    var target := _bounce_target
+    if target == null or not is_instance_valid(target) or not target.is_in_group(&"target"):
+        # 目标在路上死了：停下，链结束
+        _bouncing = false
+        velocity *= 0.3
+        _end_chain("lost")
+        return
+    var goal: Vector3 = target.global_position + _bounce_offset
+    var to_goal: Vector3 = goal - global_position
+    var dist: float = to_goal.length()
+    var to_target: Vector3 = (target.global_position - global_position).normalized()
+    if dist <= 0.4 or _bounce_timer <= 0.0:
+        _bouncing = false
+        # 到达时留一点前冲的惯性，不要急刹
+        velocity = to_target * max_speed * 0.5
+        _launch_attack(0.0, to_target, true)
+        return
+    # 每帧重新瞄准：敌人在动，直线飞向出发时的位置会扑空。离到达点很近时减速，避免一帧冲过头
+    velocity = to_goal / dist * minf(bounce_speed, dist / maxf(get_physics_process_delta_time(), 0.001))
+    _face_toward(to_target)
+
+
+## 到达点 = 目标 + 偏移。偏移由"沿来路退回"和"往镜头左/右侧让开"按权重混合，长度 = 到达距离
+func _compute_arrive_offset(target: Node3D) -> Vector3:
+    var from_target: Vector3 = global_position - target.global_position
+    var back: Vector3 = from_target.normalized() if from_target.length_squared() > 0.0001 else Vector3.BACK
+    var side: Vector3 = back
+    var cam: Camera3D = get_viewport().get_camera_3d()
+    if cam != null:
+        var cam_right: Vector3 = cam.global_basis.x
+        cam_right.y = 0.0
+        if cam_right.length_squared() > 0.0001:
+            cam_right = cam_right.normalized()
+            var s: float = signf(from_target.dot(cam_right))
+            side = cam_right * (s if s != 0.0 else 1.0)
+    var mixed: Vector3 = back.lerp(side, bounce_arrive_side_weight)
+    if mixed.length_squared() < 0.0001:
+        mixed = side
+    return mixed.normalized() * bounce_arrive_distance
+
+
+func _end_chain(reason: String) -> void:
+    _bounce_window = 0.0
+    if not _chain_active:
+        return
+    _chain_active = false
+    chain_ended.emit(_chain_hits, _chain_bounces, reason)
+
+
+func _current_bounce_preset() -> Dictionary:
+    return BOUNCE_PRESETS[clampi(bounce_preset, 0, BOUNCE_PRESETS.size() - 1)]
+
+
+func is_bouncing() -> bool:
+    return _bouncing
+
+
+## 试玩记录用：当前 A/B 预设的字母
+func get_ab_preset_letter() -> String:
+    return str(_current_bounce_preset()["name"]).substr(0, 1)
+
+
 ## 闪避方向 = 当前移动输入（含上升/下降），所以能往上、往下躲；没推方向就往身后撤。
 ## 只能在待机或蓄力时闪：伪足伸出去之后"门户大开"是长伪足的代价，不能用闪避抵消
 func _try_start_dodge() -> void:
     if _dodge_buffer <= 0.0 or _dodge_timer > 0.0 or _dodge_cooldown_timer > 0.0 or _stun_timer > 0.0:
+        return
+    # 弹射途中不能闪：两个位移叠在一起读不清，而且弹射本来就是"选择了暴露"
+    if _bouncing:
         return
     match _pod_state:
         PodState.IDLE:
@@ -688,11 +914,12 @@ func is_dodging() -> bool:
     return _dodge_timer > 0.0
 
 
-## 血条下面那行提示。闪避冷却中才显示，平时空着不占地方
+## 血条下面那行提示：当前 A/B 预设常驻；闪避冷却中再加一句
 func get_hud_hint() -> String:
+    var hint: String = "弹射窗口：%s（F2 / 十字键上 切换）" % _current_bounce_preset()["name"]
     if _dodge_cooldown_timer > 0.0:
-        return "闪避冷却中"
-    return ""
+        hint += "    闪避冷却中"
+    return hint
 
 
 ## 敌人攻击命中时调用。返回 false 表示处于无敌时间、这一下没生效
@@ -704,6 +931,10 @@ func take_damage(amount: float, knockback: Vector3) -> bool:
         return false
     if _invuln_timer > 0.0:
         return false
+    # 弹射没有无敌：途中被打中就被打断，链结束
+    if _bouncing:
+        _bouncing = false
+        _end_chain("hurt")
     health -= amount
     _invuln_timer = hurt_invuln_time
     _stun_timer = hurt_stun_time
@@ -776,6 +1007,9 @@ func _update_visuals() -> void:
         # 无敌时间内身体发白，玩家能看出"这段时间被打不到"
         if _iframe_timer > 0.0:
             color = color.lerp(Color.WHITE, 0.6)
+        # 弹射窗口开着时身体发黄：窗口只有零点几秒，不提示的话玩家不知道它存在
+        elif _bounce_window > 0.0:
+            color = color.lerp(bounce_window_tint, 0.7)
         _body_material.albedo_color = color
 
     _aim_marker.visible = idle_or_charging

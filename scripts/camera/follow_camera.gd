@@ -45,6 +45,14 @@ extends Camera3D
 ## 松开右摇杆多久后，自动回正才重新生效（秒）。避免刚转好的镜头被立刻拉回去
 @export var auto_follow_resume_delay: float = 1.0
 
+@export_group("弹射时")
+## 弹射途中镜头额外拉远多少米：高速换位时多看到一些周围，到达时才不懵
+@export var bounce_extra_distance: float = 2.5
+## 拉远/拉回的响应速度
+@export var bounce_distance_rate: float = 6.0
+## 弹射途中镜头朝飞行方向转的速度：提前把目标带进画面。0 = 不引导
+@export var bounce_yaw_lead_rate: float = 5.0
+
 @export_group("震动")
 ## 震动强度为 1 时镜头最多偏移多少米
 @export var shake_max_offset: float = 0.35
@@ -52,6 +60,7 @@ extends Camera3D
 @export var shake_decay: float = 2.5
 
 var _trauma: float = 0.0
+var _extra_distance: float = 0.0
 var _yaw: float = 0.0
 var _pitch_deg: float = 0.0
 var _pivot: Vector3 = Vector3.ZERO
@@ -75,8 +84,28 @@ func _physics_process(delta: float) -> void:
     _pivot = _pivot.lerp(target.global_position, 1.0 - exp(-position_follow_rate * delta))
     _update_manual(delta)
     _update_yaw(delta)
+    _update_bounce_camera(delta)
     _trauma = maxf(_trauma - shake_decay * delta, 0.0)
     _apply()
+
+
+## 弹射时拉远 + 朝飞行方向引导。只动距离和水平朝向，不动俯仰，更不 roll
+func _update_bounce_camera(delta: float) -> void:
+    var bouncing: bool = target.has_method(&"is_bouncing") and target.call(&"is_bouncing")
+    var want: float = bounce_extra_distance if bouncing else 0.0
+    _extra_distance = lerpf(_extra_distance, want, 1.0 - exp(-bounce_distance_rate * delta))
+    if not bouncing or bounce_yaw_lead_rate <= 0.0:
+        return
+    var v: Vector3 = target.velocity
+    v.y = 0.0
+    if v.length() < 1.0:
+        return
+    var desired: float = atan2(-v.x, -v.z)
+    # 朝镜头方向弹回来时不转：和平时一样，避免镜头绕着主角甩 180°
+    var cam_fwd := Vector3(-sin(_yaw), 0.0, -cos(_yaw))
+    if cam_fwd.dot(v.normalized()) < -0.3:
+        return
+    _yaw = lerp_angle(_yaw, desired, 1.0 - exp(-bounce_yaw_lead_rate * delta))
 
 
 ## 叠加一次震动，强度 0..1，多次受击会叠加但不超过 1
@@ -118,7 +147,7 @@ func _apply() -> void:
     var orbit: Basis = Basis(Vector3.UP, _yaw) * Basis(Vector3.RIGHT, pitch)
     # orbit.x 是镜头右方；绕 X 轴的俯仰不改变它，所以它始终水平，平移不会带来 roll
     var look_point: Vector3 = _pivot + Vector3.UP * look_height_offset + orbit.x * shoulder_offset
-    global_position = look_point + orbit * Vector3(0.0, 0.0, distance)
+    global_position = look_point + orbit * Vector3(0.0, 0.0, distance + _extra_distance)
     look_at(look_point, Vector3.UP)
     # 震动只做平移、放在 look_at 之后：不改变朝向，绝不会带出 roll
     if _trauma > 0.0:
