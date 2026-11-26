@@ -22,12 +22,6 @@ signal chain_ended(hits: int, bounces: int, reason: String)
 
 enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 
-## 弹射窗口长度的 A/B 预设，F2 / 十字键上切换。只把这一个给开发者（策划规格第 8 条）
-const BOUNCE_PRESETS: Array[Dictionary] = [
-    {"name": "A 短", "window": 0.25},
-    {"name": "B 长", "window": 0.5},
-]
-
 @export_group("移动")
 ## 最大悬浮速度（米/秒）
 @export var max_speed: float = 7.0
@@ -160,8 +154,9 @@ const BOUNCE_PRESETS: Array[Dictionary] = [
 @export var dodge_buffer_time: float = 0.15
 
 @export_group("连招弹射")
-## 当前弹射窗口预设（见 BOUNCE_PRESETS）
-@export var bounce_preset: int = 0
+## 命中后弹射窗口开多久（秒，游戏时间）。
+## 2026-11-26 A/B：0.25（短）vs 0.5（长），开发者选长："B 更顺手"；行为上 B 的 ≥2 下连招占比也是 A 的两倍
+@export var bounce_window_time: float = 0.5
 ## 在输入方向多大的锥形里找下一个目标（半角，度）。上下和水平一视同仁
 @export_range(5.0, 90.0) var bounce_cone_deg: float = 50.0
 ## 多远以内的敌人能被弹过去（米）
@@ -310,8 +305,6 @@ func _unhandled_input(event: InputEvent) -> void:
         _buffer_timer = input_buffer_time
     elif event.is_action_pressed(&"dodge"):
         _dodge_buffer = dodge_buffer_time
-    elif event.is_action_pressed(&"cycle_preset"):
-        bounce_preset = (bounce_preset + 1) % BOUNCE_PRESETS.size()
 
 
 func _physics_process(delta: float) -> void:
@@ -758,7 +751,7 @@ func _on_chain_hit(target: Object) -> void:
         _chain_visited = [keep]
     _chain_hits += 1
     if _chain_bounces < bounce_max_chain:
-        _bounce_window = float(_current_bounce_preset()["window"])
+        _bounce_window = bounce_window_time
     else:
         _end_chain("max")
 
@@ -866,17 +859,8 @@ func _end_chain(reason: String) -> void:
     chain_ended.emit(_chain_hits, _chain_bounces, reason)
 
 
-func _current_bounce_preset() -> Dictionary:
-    return BOUNCE_PRESETS[clampi(bounce_preset, 0, BOUNCE_PRESETS.size() - 1)]
-
-
 func is_bouncing() -> bool:
     return _bouncing
-
-
-## 试玩记录用：当前 A/B 预设的字母
-func get_ab_preset_letter() -> String:
-    return str(_current_bounce_preset()["name"]).substr(0, 1)
 
 
 ## 闪避方向 = 当前移动输入（含上升/下降），所以能往上、往下躲；没推方向就往身后撤。
@@ -914,12 +898,11 @@ func is_dodging() -> bool:
     return _dodge_timer > 0.0
 
 
-## 血条下面那行提示：当前 A/B 预设常驻；闪避冷却中再加一句
+## 血条下面那行提示。闪避冷却中才显示；以后有 A/B 在测时，预设名也放这里
 func get_hud_hint() -> String:
-    var hint: String = "弹射窗口：%s（F2 / 十字键上 切换）" % _current_bounce_preset()["name"]
     if _dodge_cooldown_timer > 0.0:
-        hint += "    闪避冷却中"
-    return hint
+        return "闪避冷却中"
+    return ""
 
 
 ## 敌人攻击命中时调用。返回 false 表示处于无敌时间、这一下没生效

@@ -76,14 +76,17 @@ def main() -> None:
     strikes = events("strike")
     if bounces or chains:
         print("—— 连招弹射 ——")
-        for letter, label in (("A", "A 短窗口"), ("B", "B 长窗口")):
-            sub_chains = [r for r in chains if r.get("preset") == letter]
-            secs = sum(r["event"] == "sample" and r.get("preset") == letter for r in rows) * 0.5
+        # 有 A/B 在测时按预设分开；没有（preset 列为空）就整体算一组
+        letters = sorted({r.get("preset") or "" for r in rows})
+        groups = [(p, f"预设 {p}") for p in letters if p] or [("", "全部")]
+        for letter, label in groups:
+            sub_chains = [r for r in chains if (r.get("preset") or "") == letter]
+            secs = sum(r["event"] == "sample" and (r.get("preset") or "") == letter for r in rows) * 0.5
             if not sub_chains and secs == 0:
                 continue
             lengths = Counter(int(r["info"].split("/")[0]) for r in sub_chains)
             reasons = Counter(r["info"].split("/")[2] for r in sub_chains)
-            sub_dodges = sum(r["event"] == "dodge" and r.get("preset") == letter for r in rows)
+            sub_dodges = sum(r["event"] == "dodge" and (r.get("preset") or "") == letter for r in rows)
             print(f"  [{label}] 约 {secs:.0f} 秒，连招链 {len(sub_chains)} 条；"
                   f"链长（打中几下）{dict(sorted(lengths.items()))}；结束原因 {dict(reasons)}；"
                   f"闪避 {sub_dodges / max(secs / 60.0, 0.01):.1f} 次/分钟")

@@ -13,7 +13,7 @@ extends Node
 ##   bounce    玩家弹射；elev_deg = 朝目标方向的仰角；info = 本链第几次弹射
 ##   strike    弹射到达后的自动轻击结束；info = 1 打中 / 0 落空（经常落空 = 到达时是懵的）
 ##   chain     一条连招链结束；info = "打中几下/弹射几次/结束原因"
-## preset 列 = 当时的 A/B 预设字母（弹射窗口 A 短 / B 长）
+## preset 列 = 当时在测的 A/B 预设（没有 A/B 在测时为空，列保留以便以后复用）
 
 @export var player: Player
 ## 关掉就不写文件
@@ -171,7 +171,7 @@ func _write(event: String, elev: float, rel_y: float, on_screen: int, info: Stri
         "" if is_nan(rel_y) else "%.2f" % rel_y,
         "" if on_screen < 0 else str(on_screen),
         _threat_count(),
-        player.get_ab_preset_letter(),
+        "",
         info,
     ])
     # 每行都落盘：试玩可能直接关窗口，不能指望正常退出时才写

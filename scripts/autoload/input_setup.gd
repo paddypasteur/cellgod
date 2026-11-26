@@ -31,8 +31,6 @@ func _enter_tree() -> void:
     _add_action(&"camera_down", [_joy_axis(JOY_AXIS_RIGHT_Y, 1.0)])
 
     _add_action(&"toggle_debug", [_key(KEY_F1), _joy_button(JOY_BUTTON_BACK)])
-    # A/B 预设切换：给开发者当场对比用（当前用于弹射窗口长短）
-    _add_action(&"cycle_preset", [_key(KEY_F2), _joy_button(JOY_BUTTON_DPAD_UP)])
     # 闪避：手柄 B（类魂惯例），键鼠临时用右键
     _add_action(&"dodge", [_mouse(MOUSE_BUTTON_RIGHT), _joy_button(JOY_BUTTON_B)])
 
