@@ -3,7 +3,16 @@
 > **所有者：开发 Claude。** 策划 Claude 只读，也可以直接读仓库代码；有出入时以代码为准。
 > 最后更新：2026-11-25
 
-## 最近一次改动（2026-11-25 第三批：空间参照）
+## 最近一次改动（2026-11-26：纬线环）
+
+- **高度标记 A/B 删除**，换成**纬线环**（`scripts/arena/latitude_rings.gd`）：球壁内侧每 2.5 米一圈淡环，
+  赤道一圈更亮。交战区里不新增物体。间距、粗细、透明度可调
+- 敌人头顶文字加 ↑ / ↓：比玩家高/低超过 1.5 米时显示
+- F2 / 十字键上的切换键删除（没有 A/B 在测了）；试玩记录去掉 preset 列
+- `tests/analyze_playtest.py` 输出闪避仰角直方图和 ≥45° 占比。
+  注意：升降是数字键，闪避仰角只会是 0 / ±45 / ±90 几档
+
+## 上一批改动（2026-11-25 第三批：空间参照）
 
 - **漂浮颗粒**（`scripts/arena/drift_particles.gd`）：600 个小颗粒在竞技场里缓慢漂移，用来感知自己的速度和位置。
   不碰撞、不参与索敌
@@ -125,7 +134,7 @@
 | `scripts/autoload/sfx.gd` | 代码合成的占位音效 |
 | `scripts/debug/playtest_logger.gd` | 试玩记录器（arena.tscn 里的 PlaytestLogger 节点） |
 | `scripts/arena/drift_particles.gd` | 漂浮颗粒 |
-| `scripts/arena/height_markers.gd` | 高度标记（A/B 两种画法） |
+| `scripts/arena/latitude_rings.gd` | 球壁上的纬线环（高度参照） |
 | `tests/analyze_playtest.py` | 统计最新一份试玩记录 |
 | `scripts/autoload/input_setup.gd` | 默认键位（编辑器输入映射里设过的优先） |
 | `scripts/ui/debug_overlay.gd` | 调试面板 |

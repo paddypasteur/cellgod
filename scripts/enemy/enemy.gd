@@ -77,6 +77,8 @@ const STATE_LABELS: PackedStringArray = ["接近", "前摇", "攻击", "硬直",
 @export var color_hurt: Color = Color(1.0, 1.0, 1.0)
 ## 受击闪白的时长（秒）
 @export var hurt_flash_time: float = 0.12
+## 头顶文字里的 ↑ / ↓：比玩家高/低超过这么多米才显示。只是"看不清时的兜底"，不取代空间感知
+@export var label_height_threshold: float = 1.5
 ## 用于竞技场边界约束的半径，要和碰撞形状一致
 @export var body_radius: float = 0.6
 
@@ -324,7 +326,13 @@ func _update_visuals() -> void:
     _material.albedo_color = color
     # 杆状身体的长轴指向攻击/玩家方向，冲刺方向一眼可读
     _visual.basis = _basis_facing(facing).scaled(Vector3.ONE * scale_factor)
-    _label.text = "%s  %d" % [STATE_LABELS[_state], ceili(health)]
+    var arrow: String = ""
+    var rel_y: float = global_position.y - _player.global_position.y
+    if rel_y > label_height_threshold:
+        arrow = "↑ "
+    elif rel_y < -label_height_threshold:
+        arrow = "↓ "
+    _label.text = "%s%s  %d" % [arrow, STATE_LABELS[_state], ceili(health)]
     _label.modulate = color.lightened(0.3)
 
 

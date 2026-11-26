@@ -42,16 +42,30 @@ def main() -> None:
         share = 100 * (up + down) / len(elev) if elev else 0
         return f"{len(elev)} 次：水平 {len(elev) - up - down} / 往上 {up} / 往下 {down}（垂直占 {share:.0f}%）"
 
-    print("闪避 " + dodge_line(events("dodge")))
-    # 新版记录带 preset 列（高度标记画法），试玩中途切换过 A/B 时分开统计
-    names = {"0": "A 投到地面", "1": "B 投到你的高度"}
-    presets = sorted({r.get("preset") or "" for r in rows} - {""})
-    if len(presets) > 1:
-        for p in presets:
-            sub = [r for r in rows if r.get("preset") == p]
-            secs = sum(r["event"] == "sample" for r in sub) * 0.5
-            print(f"  [{names.get(p, p)}] 约 {secs:.0f} 秒，闪避 " +
-                  dodge_line([r for r in sub if r["event"] == "dodge"]))
+    dodges = events("dodge")
+    print("闪避 " + dodge_line(dodges))
+    elev_all = [float(r["elev_deg"]) for r in dodges]
+    if elev_all:
+        steep = sum(abs(e) >= 45 for e in elev_all)
+        print(f"  仰角 ≥45°（明确的垂直决策）：{steep} 次，占全部闪避 {100 * steep / len(elev_all):.0f}%")
+        # 按 10° 一档的直方图。20° 左右多半是"斜着走位"的副产品，70° 以上才是明确往上/下躲；
+        # 也用来判断新鲜感：试新鲜的人会按出夸张角度，真在用的人按出"刚好够躲开"的角度
+        # 注意：升降是数字键（按下 = 满输入），摇杆推满时合成角正好 45°，不推摇杆只按升降就是 90°，
+        # 所以角度会集中在 0 / ±45 / ±90 几个值上，不是连续分布
+        print("  仰角分布（10° 一档，正 = 往上；0 那档 = -5°~+5°）：")
+        def bucket(e: float) -> int:
+            if abs(e) < 5:
+                return 0
+            return int(e // 10) * 10 if e > 0 else -int((-e) // 10) * 10
+        counts = Counter(bucket(e) for e in elev_all)
+        for b in sorted(counts, reverse=True):
+            if b == 0:
+                label = "     -5~+5"
+            elif b > 0:
+                label = f"{b:+4d}~{b + 10:+d}"
+            else:
+                label = f"{b - 10:+4d}~{b:+d}"
+            print(f"    {label:>10}° {'█' * counts[b]} {counts[b]}")
     print(f"靠无敌时间躲掉 {len(events('saved'))} 次")
 
     hurt = events("hurt")
