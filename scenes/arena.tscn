@@ -10,7 +10,7 @@
 [ext_resource type="Script" uid="uid://cpmi0c5jtvhbt" path="res://scripts/ui/health_bar.gd" id="8_health"]
 [ext_resource type="Script" uid="uid://ba7wrcgih6f5j" path="res://scripts/debug/playtest_logger.gd" id="9_logger"]
 [ext_resource type="Script" uid="uid://bvf5hxukxi7m7" path="res://scripts/arena/drift_particles.gd" id="10_particles"]
-[ext_resource type="Script" path="res://scripts/arena/latitude_rings.gd" id="11_rings"]
+[ext_resource type="Script" uid="uid://by8u1464tpjso" path="res://scripts/arena/latitude_rings.gd" id="11_rings"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 1
