@@ -22,5 +22,8 @@ func _ready() -> void:
         sphere.height = radius * 2.0
     var dummies: Node = get_node_or_null(^"Dummies")
     if dummies != null and not show_dummies:
-        # 直接释放而不是隐藏：隐藏的靶子仍在 target 组里、仍有碰撞，会继续被索敌和挡路
+        # 直接释放而不是隐藏：隐藏的靶子仍在 target 组里、仍有碰撞，会继续被索敌和挡路。
+        # queue_free 要等到帧末才真正删除，先立刻退出 target 组，免得这一帧被玩家锁定、下一帧变成悬空引用
+        for d: Node in dummies.get_children():
+            d.remove_from_group(&"target")
         dummies.queue_free()

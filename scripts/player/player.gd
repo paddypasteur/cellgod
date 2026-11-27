@@ -5,7 +5,7 @@ extends CharacterBody3D
 ## 攻击形态是挥扫。被淘汰的方案不留开关，从 git 历史找回：
 ## 四种旧瞄准方案在 3c64973，直刺在 fa090b9。
 
-signal hit_landed(target: Node, charge: float)
+signal hit_landed(target: Node, strength: float)
 signal health_changed(current: float, maximum: float)
 ## 血量归零。原型阶段不做死亡流程，发完信号直接回满
 signal defeated
@@ -21,10 +21,15 @@ signal bounce_strike(hit: bool)
 signal chain_ended(hits: int, bounces: int, reason: String)
 ## 弹射飞到目标身边（自动轻击即将出手）
 signal bounce_arrived
-## 发出一击（记录轻/重击频率用）。auto = 弹射到达后的自动轻击
-signal attack_launched(charge: float, auto: bool)
+## 发出一击。kind = "L1"/"L2"/"L3"…（轻击第几段）、"H"（重击）、"auto"（弹射到达后的自动轻击）
+signal attack_launched(kind: String)
+## 一击挥完，hit = 有没有打中东西（算命中率用）
+signal attack_resolved(kind: String, hit: bool)
+## 一套轻击连段结束（回到待机或被别的动作打断），length = 这套打了几段
+signal combo_ended(length: int)
 
-enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
+## WINDUP 只有重击有（聚合段）；轻击按下直接进 SWEEPING
+enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 
 @export_group("移动")
 ## 最大悬浮速度（米/秒）
@@ -39,8 +44,8 @@ enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export_group("朝向")
 ## 待机/移动时身体转向的速度（度/秒）
 @export var turn_speed_deg: float = 720.0
-## 蓄力期间还能慢慢修正朝向的速度（度/秒）。0 = 蓄力时完全锁死
-@export var charge_turn_speed_deg: float = 180.0
+## 重击聚合期间还能慢慢修正朝向的速度（度/秒）。0 = 聚合时完全锁死
+@export var windup_turn_speed_deg: float = 180.0
 ## 按下攻击时若推着方向，立刻转过去再出招（类魂的"按方向+攻击"）
 @export var snap_facing_on_attack: bool = true
 ## 朝向最多能抬头/低头多少度。上升/下降输入会让正面倾斜，0 = 正面永远水平
@@ -84,25 +89,40 @@ enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 方向攻击开启时，出招期间升降键只管方向，不再让身体上下移动
 @export var directional_locks_vertical_move: bool = true
 
-@export_group("伪足 · 长度与蓄力")
-## 轻点时伸出的长度（从膜表面算起，米）
-@export var pod_min_length: float = 1.5
-## 蓄满时伸出的长度
-@export var pod_max_length: float = 7.0
-## 从开始按住到蓄满所需时间（秒）
-@export var charge_time_to_max: float = 0.6
-## 按住时间短于此值就松开，算轻点（最短伪足、零蓄力）
-@export var tap_threshold: float = 0.1
+@export_group("攻击 · 连续轻击")
+## 2026-11-27 开发者定：取消蓄力，改成只狼那种连续轻击。原话："不要太快也不要太慢，中等距离，不要打不到人"。
+## 按下即出手（以前是松手才出手，那是轻击慢的大头）。
+## 轻击刃长（从膜表面算起，米），固定，不随任何东西变化。
+## 敌人保持约 5 米游走、冲刺后停在 1 米多：3 米刃长 + 身体半径 + 判定粗细 + 敌人半径 ≈ 中心 4.4 米内都够得着
+@export var light_reach: float = 3.0
+## 一套连段最多几下
+@export var light_combo_segments: int = 3
+## 每段挥扫的总角度（度）
+@export_range(0.0, 300.0) var light_arc_deg: float = 100.0
+## 每段扫完整个弧的时间（秒）
+@export var light_swing_time: float = 0.1
+## 每段挥完后停留多久（秒）。停留 + 收回就是"接下一段"的取消窗口：这期间再按就直接接下一段
+@export var light_hold_time: float = 0.06
+## 收回速度（米/秒）
+@export var light_retract_speed: float = 30.0
+## 最后一段打完后额外的收招时间（秒），期间不能起新连段——一套打完要付一点代价
+@export var light_finisher_recover: float = 0.2
+## 刃在挥的过程中沿弧线成型：开始时有多长（相对刃长），挥到一半长满
+@export_range(0.1, 1.0) var light_form_start: float = 0.35
 
-@export_group("伪足 · 挥扫")
-## 轻点时挥扫的总角度（度）
-@export_range(0.0, 300.0) var swing_arc_short_deg: float = 70.0
-## 蓄满时挥扫的总角度（度）
-@export_range(0.0, 300.0) var swing_arc_long_deg: float = 150.0
-## 轻点时扫完整个弧所用的时间（秒）
-@export var swing_time_short: float = 0.08
-## 蓄满时扫完整个弧所用的时间（秒）。长伪足扫得慢 = 破绽大
-@export var swing_time_long: float = 0.25
+@export_group("攻击 · 重击")
+## 独立按键（手柄 RB / 键盘 E），不是蓄力。保留"看得见的聚合、看得见的长、门户大开"
+@export var heavy_reach: float = 4.5
+## 聚合段（秒）：膜鼓起、扇形预告。期间可以闪避取消
+@export var heavy_windup_time: float = 0.35
+@export_range(0.0, 300.0) var heavy_arc_deg: float = 150.0
+## 伸出速度（米/秒）
+@export var heavy_extend_speed: float = 25.0
+@export var heavy_swing_time: float = 0.25
+@export var heavy_hold_time: float = 0.25
+@export var heavy_retract_speed: float = 14.0
+
+@export_group("攻击 · 挥扫通用")
 ## 挥扫平面的倾角（度）。0 = 水平左右扫；90 = 竖直从上往下劈；45 = 斜劈；负数反向倾斜
 @export_range(-90.0, 90.0) var swing_plane_deg: float = 0.0
 ## 连续出招时左右（或上下）交替挥扫
@@ -112,32 +132,19 @@ enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 判定的角度步长（度）。挥得快、弧度大时防止一帧扫过头跳过目标；越小越准
 @export_range(1.0, 20.0) var swing_check_step_deg: float = 4.0
 
-@export_group("伪足 · 时序")
-## 伸出速度（米/秒）。实际速度按蓄力在短/长之间插值：长伪足伸得慢
-@export var extend_speed_short: float = 45.0
-@export var extend_speed_long: float = 25.0
-## 伸到头后停留的时间（秒）。长伪足停得久 = 破绽大
-@export var hold_time_short: float = 0.03
-@export var hold_time_long: float = 0.25
-## 收回速度（米/秒）
-@export var retract_speed_short: float = 40.0
-@export var retract_speed_long: float = 14.0
-## 收回过程中提前按下的攻击会被记住多久（秒），收完立刻开始下一次蓄力
-@export var input_buffer_time: float = 0.15
+## 提前按下的攻击记住多久（秒）：挥扫途中按下的，挥完立刻接下一段
+@export var input_buffer_time: float = 0.2
 
-@export_group("伪足 · 风险")
-## 蓄力期间的移动速度倍率
-@export_range(0.0, 1.0) var move_scale_charging: float = 0.6
-## 伪足伸出期间（伸、停、收）的移动速度倍率，按蓄力在短/长之间插值
-@export_range(0.0, 1.0) var move_scale_extended_short: float = 0.8
-@export_range(0.0, 1.0) var move_scale_extended_long: float = 0.2
+@export_group("攻击 · 风险")
+## 重击聚合期间的移动速度倍率
+@export_range(0.0, 1.0) var move_scale_windup: float = 0.6
+## 出招期间（伸、挥、停、收）的移动速度倍率：轻击 / 重击
+@export_range(0.0, 1.0) var move_scale_light: float = 0.8
+@export_range(0.0, 1.0) var move_scale_heavy: float = 0.2
 
-@export_group("伪足 · 命中")
+@export_group("攻击 · 命中")
 ## 伪足的判定半径（粗细）
 @export var pod_tip_radius: float = 0.35
-## 命中定格时长（秒），按蓄力在轻/重之间插值。重击多冻几帧
-@export var hitstop_light: float = 0.05
-@export var hitstop_heavy: float = 0.14
 ## 伪足能打到的物理层
 @export_flags_3d_physics var hit_mask: int = 2
 
@@ -152,26 +159,40 @@ enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export var dodge_cooldown: float = 0.6
 ## 闪避结束时保留多少冲刺速度（0..1），太小会有急刹车感
 @export_range(0.0, 1.0) var dodge_exit_speed_scale: float = 0.35
-## 蓄力中能否闪避（会取消这次蓄力）。伪足伸出后一律不能闪：长伪足"门户大开"的代价不能被闪避抵消
-@export var dodge_cancels_charge: bool = true
+## 重击聚合中能否闪避（会取消这次重击）。重击伸出后一律不能闪："门户大开"的代价不能被闪避抵消
+@export var dodge_cancels_windup: bool = true
+## 轻击挥完后的停留/收回阶段能否闪避取消。轻击本来就便宜，不让闪的话连按会被锁在原地
+@export var dodge_cancels_light_recovery: bool = true
 ## 提前按下的闪避记住多久（秒）
 @export var dodge_buffer_time: float = 0.15
 
-@export_group("打击感")
-## 2026-11-27 A/B：原来那套 vs 下面四项（命中镜头抖、命中急停、脆命中音、轻击无伸出段），
-## 开发者选后者："B 好一点"；行为上出招频率翻倍、命中后到下一次按键从 265 ms 缩到 130 ms。旧那套已删除
-## 命中时镜头抖动强度（0..1，镜头那边按平方换算成位移，所以小值几乎只有一丝）。
-## 必须远小于受击抖动（0.6）：轻击一秒可能命中好几次，每次都明显抖会晕
-@export_range(0.0, 1.0) var hit_shake_light: float = 0.12
-@export_range(0.0, 1.0) var hit_shake_heavy: float = 0.4
-## 命中瞬间保留多少速度（0 = 完全刹停）。冲势被打断比被弹开更像砍到了实物
-@export_range(0.0, 1.0) var hit_brake_keep: float = 0.15
-## 命中后多久不吃移动输入、速度快速衰减（秒）
-@export var hit_brake_time: float = 0.08
-## 蓄力不超过这个值的算轻击——轻击没有伸出段，刃在挥的过程中沿弧线成型
-@export_range(0.0, 1.0) var light_max_charge: float = 0.25
-## 轻击挥扫开始时刃有多长（相对完整长度），挥到一半时长满
-@export_range(0.1, 1.0) var light_form_start: float = 0.35
+@export_group("打击感（五档阶梯）")
+## 策划 2026-11-27 的阶梯：轻击 < 重击 < 弹反 < 受击 < Boss/剧情，每档独立参数。
+## **普通轻击永远在最低档**，留出往上走的余地（开发者原话大意："特效不要做得太满，时间停止留给技能或受击"）。
+## 第 3、5 档现在没有东西用，只把位置留出来。为空时 _ready 里填默认值
+@export var tier_light_hit: HitTier
+@export var tier_heavy_hit: HitTier
+## 第 3 档：弹反（第一章才有，未实现）
+@export var tier_parry: HitTier
+@export var tier_player_hurt: HitTier
+## 第 5 档：Boss 技能、剧情瞬间（未实现）
+@export var tier_boss: HitTier
+## 命中后坐力：命中时玩家被自己的攻击推着往后退（空洞骑士小骑士那种）。
+## 它传达的是"那东西比我重"——全队最小最弱的那个。初速度（米/秒）：轻击 / 重击
+@export var recoil_light: float = 2.0
+@export var recoil_heavy: float = 5.0
+## 后坐力总体缩放。**后坐力是会成长的**：序章每砍一下都被推退半步，第一章改造后同样的攻击站得住。
+## 现在不实现成长，只留这个系数（默认 1）
+@export var recoil_scale: float = 1.0
+## 后坐期间不吃移动输入的时间（秒），之后后退的速度很快衰减掉
+@export var recoil_control_time: float = 0.1
+## 胞质飞溅方向 = "朝攻击者"（从目标往玩家）× 权重 + "逆着刃的运动方向" × 权重。
+## 开发者要的是"朝挥击的反方向迸溅"，两种理解都保留成参数
+@export var spray_toward_attacker_weight: float = 1.0
+@export var spray_against_slash_weight: float = 0.6
+## 胞质 / 膜的颜色（白盒纯色）。胞质用乳白：淡黄会和准星、目标标记的黄色撞色（截图确认）
+@export var fx_cytoplasm_color: Color = Color(1.0, 0.97, 0.9)
+@export var fx_membrane_color: Color = Color(0.45, 0.6, 0.25)
 
 @export_group("连招弹射")
 ## 是否拥有弹射能力。2026-11-26 起弹射降级为"装备/符文授予的能力"，默认没有。
@@ -207,10 +228,7 @@ enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export var hurt_stun_time: float = 0.2
 ## 受击失控期间击退速度的衰减响应。越小被打得越远
 @export var hurt_knockback_damping: float = 4.0
-## 受击时的命中定格（秒）
-@export var hurt_hitstop: float = 0.06
-## 受击时的镜头震动强度（0..1）
-@export_range(0.0, 1.0) var hurt_camera_shake: float = 0.6
+## 受击的定格和镜头抖在"打击感"组的 tier_player_hurt 里
 ## 受击闪红
 @export var hurt_flash_color: Color = Color(1.0, 0.2, 0.2)
 @export var hurt_flash_time: float = 0.25
@@ -218,9 +236,9 @@ enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export_group("显示")
 ## 身体半径。要和碰撞形状、身体网格保持一致
 @export var body_radius: float = 0.5
-## 蓄力时显示一片扇形，预告将要扫过的范围
+## 重击聚合时显示一片扇形，预告将要扫过的范围
 @export var show_reach_preview: bool = true
-## 蓄满时膜鼓起部分沿攻击方向拉长到多少（相对身体直径）
+## 重击聚合到最后时膜鼓起部分沿攻击方向拉长到多少（相对身体直径）
 @export var bulge_max_stretch: float = 1.2
 
 ## 竞技场边界由 Arena 在运行时写入，不在这里调
@@ -262,15 +280,23 @@ var _chain_visited: Array[int] = []
 ## 用来区分"不想弹"和"想弹但没弹出来"——后者多说明弹射难触发
 var _bounce_attempt_failed: bool = false
 
-## B 预设：命中急停剩余时间
-var _brake_timer: float = 0.0
-## B 预设：本次轻击的刃正在沿弧线成型（没有伸出段）
+## 命中后坐期间剩余时间
+var _recoil_timer: float = 0.0
+## 本次轻击的刃正在沿弧线成型（没有伸出段）
 var _light_forming: bool = false
 
 var _pod_state: PodState = PodState.IDLE
-var _charge_time: float = 0.0
+var _windup_time: float = 0.0
 var _hold_timer: float = 0.0
 var _buffer_timer: float = 0.0
+var _heavy_buffer: float = 0.0
+## 当前这一击是重击
+var _attack_is_heavy: bool = false
+var _attack_kind: String = ""
+## 当前轻击连段打到第几段（0 = 不在连段中）
+var _combo_index: int = 0
+## 连段打满后的收招剩余时间
+var _finisher_timer: float = 0.0
 
 ## 当前瞄准方向（已含索敌），世界空间单位向量
 var _aim_dir: Vector3 = Vector3.FORWARD
@@ -284,9 +310,9 @@ var _target_hold_timer: float = 0.0
 var _facing_yaw: float = 0.0
 var _facing_pitch: float = 0.0
 
-## 本次攻击在松手时锁定的参数
+## 本次攻击出手时锁定的参数。strength：轻击 0、重击 1（敌人按它算伤害和击退，打击档位也按它选）
 var _attack_dir: Vector3 = Vector3.FORWARD
-var _attack_charge: float = 0.0
+var _attack_strength: float = 0.0
 var _target_length: float = 0.0
 ## 当前伪足从膜表面伸出的长度
 var _pod_length: float = 0.0
@@ -322,6 +348,7 @@ func _ready() -> void:
     _pod_query.collide_with_areas = false
     _pod_query.exclude = [get_rid()]
     health = max_health
+    _ensure_tiers()
     # 复制身体材质用于受击闪红，不改动场景里的原材质
     var source := _body_mesh.get_active_material(0) as StandardMaterial3D
     if source != null:
@@ -335,6 +362,8 @@ func _unhandled_input(event: InputEvent) -> void:
     # 命中定格时物理帧暂停，轮询会漏掉定格期间的按键
     if event.is_action_pressed(&"pseudopod"):
         _buffer_timer = input_buffer_time
+    elif event.is_action_pressed(&"heavy_attack"):
+        _heavy_buffer = input_buffer_time
     elif event.is_action_pressed(&"dodge"):
         _dodge_buffer = dodge_buffer_time
     elif event.is_action_pressed(&"toggle_ability"):
@@ -352,7 +381,8 @@ func _physics_process(delta: float) -> void:
     _dodge_buffer = maxf(_dodge_buffer - delta, 0.0)
     _iframe_timer = maxf(_iframe_timer - delta, 0.0)
     _bounce_timer = maxf(_bounce_timer - delta, 0.0)
-    _brake_timer = maxf(_brake_timer - delta, 0.0)
+    _recoil_timer = maxf(_recoil_timer - delta, 0.0)
+    _finisher_timer = maxf(_finisher_timer - delta, 0.0)
     if _bounce_window > 0.0:
         _bounce_window -= delta
         if _bounce_window <= 0.0 and not _bouncing:
@@ -368,15 +398,15 @@ func _physics_process(delta: float) -> void:
 
 # ---------------------------------------------------------------- 朝向
 
-## 转身速度按攻击状态分档：待机快速转，蓄力慢慢修正，
+## 转身速度按攻击状态分档：待机快速转，重击聚合时慢慢修正，
 ## 伪足伸出后完全锁死——出招后不能再改方向，这是类魂的核心约束
 func _update_facing(delta: float) -> void:
     var turn_deg: float = 0.0
     match _pod_state:
         PodState.IDLE:
             turn_deg = turn_speed_deg
-        PodState.CHARGING:
-            turn_deg = charge_turn_speed_deg
+        PodState.WINDUP:
+            turn_deg = windup_turn_speed_deg
     if turn_deg <= 0.0:
         return
     var step: float = deg_to_rad(turn_deg) * delta
@@ -437,7 +467,7 @@ func _update_aim() -> void:
 ## 选投影离准星最近、且伪足够得着的目标，但带粘性：
 ## 以前每帧从零重选，别的目标只要近 1 像素就抢走选择，这就是"锁定乱跳"的直接原因。
 ## 现在：当前目标的距离打折（新目标必须明显更近才抢得走）；刚换目标后有最短锁定时间；
-## 蓄力中完全不换（不然蓄到一半目标跳走，这一下就打歪了）；扑过来的敌人优先
+## 重击聚合中完全不换（不然聚合到一半目标跳走，这一下就打歪了）；扑过来的敌人优先
 func _select_target(reach: float) -> Node3D:
     var cam: Camera3D = get_viewport().get_camera_3d()
     if cam == null:
@@ -446,15 +476,16 @@ func _select_target(reach: float) -> Node3D:
     var max_px: float = screen.y * target_screen_radius
     var max_dist: float = reach + pod_tip_radius + target_reach_slack
 
-    var current: Node3D = _target
+    # 先在无类型变量上检查有效性：已释放的对象赋给 Node3D 类型变量本身就会报错
+    var current: Node3D = _target if is_instance_valid(_target) else null
     var current_score: float = -1.0
-    if current != null and is_instance_valid(current) and current.is_in_group(&"target"):
+    if current != null and current.is_in_group(&"target"):
         # 已锁定的目标用放宽后的范围判定，避免在射程/屏幕边界上反复进出
         current_score = _target_score(cam, current,
             max_dist + keep_extra_range, max_px * keep_screen_radius_scale)
     if current_score < 0.0:
         current = null
-    elif _pod_state == PodState.CHARGING or _target_hold_timer > 0.0:
+    elif _pod_state == PodState.WINDUP or _target_hold_timer > 0.0:
         return current
 
     var best: Node3D = current
@@ -539,36 +570,38 @@ func _camera_flat_forward() -> Vector3:
 
 func _update_pseudopod(delta: float) -> void:
     _buffer_timer = maxf(_buffer_timer - delta, 0.0)
+    _heavy_buffer = maxf(_heavy_buffer - delta, 0.0)
 
     match _pod_state:
         PodState.IDLE:
-            # 闪避途中不起手，按键留在缓冲里，闪完立刻接
-            if _buffer_timer > 0.0 and _dodge_timer <= 0.0 and not _bouncing:
+            # 闪避、弹射途中不起手，按键留在缓冲里，结束后立刻接；一套连段打满后的收招期间也不起手
+            if _dodge_timer > 0.0 or _bouncing or _finisher_timer > 0.0:
+                return
+            if _heavy_buffer > 0.0:
+                _heavy_buffer = 0.0
                 _buffer_timer = 0.0
-                _charge_time = 0.0
-                if snap_facing_on_attack:
-                    _snap_facing_to_input()
-                    # 立刻刷新，否则这一帧的鼓包和瞄准点还指着旧方向
-                    _update_aim()
-                _pod_state = PodState.CHARGING
-                if _target != null:
-                    _face_toward(_aim_dir)
+                _begin_attack_facing()
+                _windup_time = 0.0
+                _pod_state = PodState.WINDUP
+            elif _buffer_timer > 0.0:
+                _buffer_timer = 0.0
+                _begin_attack_facing()
+                _start_light(1)
 
-        PodState.CHARGING:
-            _charge_time += delta
+        PodState.WINDUP:
+            # 重击的聚合段：看得见的蓄。到时间自动出手，不需要松手
+            _windup_time += delta
             if _target != null:
                 _face_toward(_aim_dir)
-            # 缓冲触发时按键可能早就松开了，那就等同于一次轻点
-            if not Input.is_action_pressed(&"pseudopod"):
-                _release()
+            if _windup_time >= heavy_windup_time:
+                _launch_attack(true, _aim_dir, "H")
 
         PodState.EXTENDING:
-            var speed: float = lerpf(extend_speed_short, extend_speed_long, _attack_charge)
-            # 伸出阶段相当于抬手，不判定；伸到位后才开始扫
-            _pod_length = move_toward(_pod_length, _target_length, speed * delta)
+            # 只有重击有伸出段：相当于抬手，不判定；伸到位后才开始扫
+            _pod_length = move_toward(_pod_length, _target_length, heavy_extend_speed * delta)
             if _pod_length >= _target_length:
                 _pod_state = PodState.SWEEPING
-                _play_sfx(&"swing", lerpf(1.15, 0.8, _attack_charge))
+                _play_sfx(&"swing", 0.8)
                 # 先检查起始姿态：伸到位时可能已经压在目标身上
                 if _sweep_swing_to(0.0):
                     _enter_hold()
@@ -584,72 +617,103 @@ func _update_pseudopod(delta: float) -> void:
             if stopped or _swing_t >= 1.0:
                 _enter_hold()
 
-        PodState.HOLDING:
-            _hold_timer -= delta
-            if _hold_timer <= 0.0:
-                _pod_state = PodState.RETRACTING
+        PodState.HOLDING, PodState.RETRACTING:
+            # 轻击挥完后的停留/收回 = 取消窗口：这期间再按（或挥扫途中按下留在缓冲里）就直接接下一段
+            var can_chain: bool = not _attack_is_heavy and not _auto_attack and not _bouncing
+            if can_chain and _buffer_timer > 0.0 and _combo_index < light_combo_segments:
+                _buffer_timer = 0.0
+                _begin_attack_facing()
+                _start_light(_combo_index + 1)
+                return
+            if _pod_state == PodState.HOLDING:
+                _hold_timer -= delta
+                if _hold_timer <= 0.0:
+                    _pod_state = PodState.RETRACTING
+            else:
+                var speed: float = heavy_retract_speed if _attack_is_heavy else light_retract_speed
+                _pod_length = move_toward(_pod_length, 0.0, speed * delta)
+                if _pod_length <= 0.0:
+                    _pod_state = PodState.IDLE
+                    _end_combo()
 
-        PodState.RETRACTING:
-            var speed: float = lerpf(retract_speed_short, retract_speed_long, _attack_charge)
-            _pod_length = move_toward(_pod_length, 0.0, speed * delta)
-            if _pod_length <= 0.0:
-                _pod_state = PodState.IDLE
+
+## 出手前的转身：推着方向就转过去（类魂的"按方向+攻击"），有索敌目标就朝目标
+func _begin_attack_facing() -> void:
+    if snap_facing_on_attack:
+        _snap_facing_to_input()
+        # 立刻刷新，否则这一帧的鼓包和瞄准点还指着旧方向
+        _update_aim()
+    if _target != null:
+        _face_toward(_aim_dir)
 
 
-func _current_charge() -> float:
-    if _pod_state != PodState.CHARGING:
-        return 0.0
-    var span: float = maxf(charge_time_to_max - tap_threshold, 0.001)
-    return clampf((_charge_time - tap_threshold) / span, 0.0, 1.0)
+func _start_light(index: int) -> void:
+    _combo_index = index
+    _launch_attack(false, _aim_dir, "L%d" % index)
 
 
-## 当前状态下伪足"能伸到"的长度，用于索敌范围和预告线
+## 一套连段结束：回到待机、被闪避/弹射打断。打满一整套要付一点收招时间
+func _end_combo() -> void:
+    if _combo_index <= 0:
+        return
+    combo_ended.emit(_combo_index)
+    if _combo_index >= light_combo_segments:
+        _finisher_timer = light_finisher_recover
+    _combo_index = 0
+
+
+## 当前状态下伪足"能伸到"的长度，用于索敌范围和预告
 func _current_reach_length() -> float:
     match _pod_state:
-        PodState.CHARGING:
-            return lerpf(pod_min_length, pod_max_length, _current_charge())
         PodState.IDLE:
-            return pod_min_length
+            return light_reach
+        PodState.WINDUP:
+            return heavy_reach
         _:
             return _target_length
 
 
-func _release() -> void:
-    _launch_attack(_current_charge(), _aim_dir, false)
+func _windup_progress() -> float:
+    if _pod_state != PodState.WINDUP:
+        return 0.0
+    return clampf(_windup_time / maxf(heavy_windup_time, 0.001), 0.0, 1.0)
 
 
-## 发出一击。auto = 弹射到达后的自动轻击：它属于当前连招链；玩家自己出的招则开始新的链
-func _launch_attack(charge: float, direction: Vector3, auto: bool) -> void:
+## 发出一击。kind："L1"… 轻击第几段 / "H" 重击 / "auto" 弹射到达后的自动轻击（属于当前弹射链）
+func _launch_attack(heavy: bool, direction: Vector3, kind: String) -> void:
+    var auto: bool = kind == "auto"
     if not auto:
-        # 窗口里不指方向按攻击 = 原地接招，按规格这不是弹射，旧链到此结束。
+        # 弹射窗口里不指方向按攻击 = 原地接招，按规格这不是弹射，旧链到此结束。
         # 推了方向但锥形里没目标的单独记成 no_target
         _end_chain("no_target" if _bounce_attempt_failed else "followup")
     _bounce_attempt_failed = false
     _auto_attack = auto
     _attack_hit_any = false
     _bounce_window = 0.0
-    _attack_charge = charge
-    _target_length = lerpf(pod_min_length, pod_max_length, _attack_charge)
+    _attack_is_heavy = heavy
+    _attack_kind = kind
+    _attack_strength = 1.0 if heavy else 0.0
+    _target_length = heavy_reach if heavy else light_reach
     _attack_dir = direction
     if _target != null or auto:
         _face_toward(_attack_dir)
     _pod_length = 0.0
     _swing_axis = _swing_axis_for(_attack_dir)
-    var half: float = _swing_half_arc(_attack_charge)
+    var half: float = _swing_half_arc(heavy)
     _swing_start = half * _swing_side
     _swing_end = -half * _swing_side
-    _swing_duration = lerpf(swing_time_short, swing_time_long, _attack_charge)
+    _swing_duration = heavy_swing_time if heavy else light_swing_time
     _swing_t = 0.0
     _swing_hit_ids.clear()
     if swing_alternate:
         _swing_side = -_swing_side
-    attack_launched.emit(charge, auto)
-    _light_forming = charge <= light_max_charge
+    attack_launched.emit(kind)
+    _light_forming = not heavy
     if _light_forming:
-        # 轻击：聚合与挥击合并，没有"先伸后挥"，出手即到位。重击仍然走伸出段（风险住在那里）
+        # 轻击：聚合与挥击合并，没有"先伸后挥"，出手即到位。重击走伸出段（风险住在那里）
         _pod_length = _target_length * light_form_start
         _pod_state = PodState.SWEEPING
-        _play_sfx(&"swing", lerpf(1.15, 0.8, _attack_charge))
+        _play_sfx(&"swing", 1.15)
         if _sweep_swing_to(0.0):
             _enter_hold()
     else:
@@ -661,8 +725,9 @@ func _enter_hold() -> void:
         # 碰到第一个就停的设置下挥扫可能提前结束，刃要按完整长度收回
         _light_forming = false
         _pod_length = maxf(_pod_length, _target_length * light_form_start)
-    _hold_timer = lerpf(hold_time_short, hold_time_long, _attack_charge)
+    _hold_timer = heavy_hold_time if _attack_is_heavy else light_hold_time
     _pod_state = PodState.HOLDING
+    attack_resolved.emit(_attack_kind, _attack_hit_any)
     # 挥扫结束：弹射到达后的那一击到这里就知道有没有打中
     if _auto_attack:
         _auto_attack = false
@@ -675,25 +740,62 @@ func _deal_hit(target: Object, direction: Vector3) -> void:
     if target == null:
         return
     if target.has_method(&"take_hit"):
-        target.call(&"take_hit", _attack_charge, direction)
+        target.call(&"take_hit", _attack_strength, direction)
     if target is Node:
-        hit_landed.emit(target, _attack_charge)
+        hit_landed.emit(target, _attack_strength)
     var first_hit_of_attack: bool = not _attack_hit_any
     _on_chain_hit(target)
-    _play_sfx(&"hit_crisp", lerpf(1.15, 0.8, _attack_charge))
-    # 命中也抖镜头，但远小于受击，且随蓄力缩放：轻击几乎只有一丝，重击才明显
+    # 打击档位：轻击永远是第 1 档（最低），重击第 2 档
+    var tier: HitTier = tier_heavy_hit if _attack_is_heavy else tier_light_hit
+    _play_sfx(&"hit_crisp", 0.8 if _attack_is_heavy else 1.15)
     var cam := get_viewport().get_camera_3d() as FollowCamera
     if cam != null:
-        cam.add_shake(lerpf(hit_shake_light, hit_shake_heavy, _attack_charge))
-    # 命中急停：一击只刹一次，一刀扫中多个时不重复刹
+        cam.add_shake(tier.camera_shake)
+    _spawn_hit_fx(target as Node3D, tier)
+    # 后坐力：被自己的攻击推着往后退。一击只推一次，一刀扫中多个时不重复推；弹射途中不推
     if first_hit_of_attack and not _bouncing:
-        velocity *= hit_brake_keep
-        _brake_timer = hit_brake_time
+        var push: float = (recoil_heavy if _attack_is_heavy else recoil_light) * recoil_scale
+        velocity = -_attack_dir * push
+        _recoil_timer = recoil_control_time
     # 按路径取 autoload 而不是直接写 HitStop：单脚本语法检查不加载 autoload，
     # 直接引用会让 --check-only 报"找不到标识符"
     var hit_stop: Node = get_node_or_null(^"/root/HitStop")
     if hit_stop != null:
-        hit_stop.call(&"trigger", lerpf(hitstop_light, hitstop_heavy, _attack_charge))
+        hit_stop.call(&"trigger", tier.hitstop)
+
+
+## 命中特效放在目标表面朝玩家的那一点；切口沿刃的运动方向，胞质往"朝攻击者 + 逆着刃"的方向喷
+func _spawn_hit_fx(target: Node3D, tier: HitTier) -> void:
+    if target == null or tier == null:
+        return
+    var to_player: Vector3 = global_position - target.global_position
+    if to_player.length_squared() < 0.0001:
+        to_player = -_attack_dir
+    to_player = to_player.normalized()
+    var target_radius: Variant = target.get("body_radius")
+    var radius: float = float(target_radius) if target_radius != null else 0.6
+    var hit_point: Vector3 = target.global_position + to_player * radius
+    # 绕轴转动的点的速度方向 = 轴 × 半径方向；挥扫角度在减小时方向反过来
+    var slash: Vector3 = _swing_axis.cross(_pod_dir()).normalized() * signf(_swing_end - _swing_start)
+    var spray: Vector3 = to_player * spray_toward_attacker_weight - slash * spray_against_slash_weight
+    if spray.length_squared() < 0.0001:
+        spray = to_player
+    var parent: Node = get_tree().current_scene if get_tree().current_scene != null else get_parent()
+    HitFx.spawn(parent, hit_point, spray, slash, tier, fx_cytoplasm_color, fx_membrane_color)
+
+
+## 五档里没在检查器里配的，填上默认值。轻击压在最低档；受击比以前（定格 0.06、抖 0.6）往上调了一点
+func _ensure_tiers() -> void:
+    if tier_light_hit == null:
+        tier_light_hit = HitTier.make("1 轻击命中", 0.04, 0.06, 5, 3.0, 0.25, 0.12, 0.1)
+    if tier_heavy_hit == null:
+        tier_heavy_hit = HitTier.make("2 重击命中", 0.12, 0.3, 12, 5.0, 0.4, 0.2, 0.16)
+    if tier_parry == null:
+        tier_parry = HitTier.make("3 弹反（未实现）", 0.18, 0.5, 20, 6.0, 0.5, 0.25, 0.18)
+    if tier_player_hurt == null:
+        tier_player_hurt = HitTier.make("4 玩家受击", 0.09, 0.7, 0, 0.0, 0.0, 0.0)
+    if tier_boss == null:
+        tier_boss = HitTier.make("5 Boss / 剧情（未实现）", 0.25, 0.9, 30, 7.0, 0.6, 0.3, 0.2)
 
 
 # ---------------------------------------------------------------- 挥扫
@@ -711,8 +813,8 @@ func _swing_axis_for(dir: Vector3) -> Vector3:
     return (up * cos(tilt) + right * sin(tilt)).normalized()
 
 
-func _swing_half_arc(charge: float) -> float:
-    return deg_to_rad(lerpf(swing_arc_short_deg, swing_arc_long_deg, charge)) * 0.5
+func _swing_half_arc(heavy: bool) -> float:
+    return deg_to_rad(heavy_arc_deg if heavy else light_arc_deg) * 0.5
 
 
 ## 伪足当前实际指向，随挥扫进度转动
@@ -770,9 +872,9 @@ func _update_movement(delta: float) -> void:
     elif _stun_timer > 0.0:
         # 受击失控：不吃输入，只让击退速度慢慢衰减
         velocity = velocity.lerp(Vector3.ZERO, 1.0 - exp(-hurt_knockback_damping * delta))
-    elif _brake_timer > 0.0:
-        # B 的命中急停：短时间不吃移动输入，剩下的冲势很快衰减掉
-        velocity = velocity.lerp(Vector3.ZERO, 1.0 - exp(-25.0 * delta))
+    elif _recoil_timer > 0.0:
+        # 命中后坐：短时间不吃移动输入，让"被推退"被看见；之后正常移动的加速度会把它接管
+        velocity = velocity.lerp(Vector3.ZERO, 1.0 - exp(-8.0 * delta))
     else:
         var wish: Vector3 = _move_input_world(vertical_speed_scale)
         if _vertical_move_locked():
@@ -901,7 +1003,7 @@ func _update_bounce_flight() -> void:
         # 到达时留一点前冲的惯性，不要急刹
         velocity = to_target * max_speed * 0.5
         bounce_arrived.emit()
-        _launch_attack(0.0, to_target, true)
+        _launch_attack(false, to_target, "auto")
         return
     # 每帧重新瞄准：敌人在动，直线飞向出发时的位置会扑空。离到达点很近时减速，避免一帧冲过头
     velocity = to_goal / dist * minf(bounce_speed, dist / maxf(get_physics_process_delta_time(), 0.001))
@@ -952,11 +1054,17 @@ func _try_start_dodge() -> void:
     match _pod_state:
         PodState.IDLE:
             pass
-        PodState.CHARGING:
-            if not dodge_cancels_charge:
+        PodState.WINDUP:
+            if not dodge_cancels_windup:
                 return
             _pod_state = PodState.IDLE
-            _charge_time = 0.0
+        PodState.HOLDING, PodState.RETRACTING:
+            # 轻击挥完后的收招可以闪掉；重击不行（门户大开）
+            if _attack_is_heavy or _auto_attack or not dodge_cancels_light_recovery:
+                return
+            _pod_state = PodState.IDLE
+            _pod_length = 0.0
+            _end_combo()
         _:
             return
     _dodge_buffer = 0.0
@@ -1007,10 +1115,10 @@ func take_damage(amount: float, knockback: Vector3) -> bool:
 
     var cam := get_viewport().get_camera_3d() as FollowCamera
     if cam != null:
-        cam.add_shake(hurt_camera_shake)
+        cam.add_shake(tier_player_hurt.camera_shake)
     var hit_stop: Node = get_node_or_null(^"/root/HitStop")
     if hit_stop != null:
-        hit_stop.call(&"trigger", hurt_hitstop)
+        hit_stop.call(&"trigger", tier_player_hurt.hitstop)
 
     if health <= 0.0:
         health = max_health
@@ -1035,10 +1143,10 @@ func _vertical_move_locked() -> bool:
 
 func _move_scale() -> float:
     match _pod_state:
-        PodState.CHARGING:
-            return move_scale_charging
+        PodState.WINDUP:
+            return move_scale_windup
         PodState.EXTENDING, PodState.SWEEPING, PodState.HOLDING, PodState.RETRACTING:
-            return lerpf(move_scale_extended_short, move_scale_extended_long, _attack_charge)
+            return move_scale_heavy if _attack_is_heavy else move_scale_light
         _:
             return 1.0
 
@@ -1059,7 +1167,7 @@ func _apply_arena_bounds() -> void:
 # ---------------------------------------------------------------- 表现
 
 func _update_visuals() -> void:
-    var idle_or_charging: bool = _pod_state == PodState.IDLE or _pod_state == PodState.CHARGING
+    var idle_or_windup: bool = _pod_state == PodState.IDLE or _pod_state == PodState.WINDUP
 
     _facing_pivot.basis = _facing_basis()
 
@@ -1074,23 +1182,23 @@ func _update_visuals() -> void:
             color = color.lerp(bounce_window_tint, 0.7)
         _body_material.albedo_color = color
 
-    _aim_marker.visible = idle_or_charging
+    _aim_marker.visible = idle_or_windup
     if _aim_marker.visible:
         _aim_marker.position = _aim_dir * (body_radius + 0.35)
 
     # 标记是 top_level，直接用世界坐标挂在目标头顶
-    _target_marker.visible = idle_or_charging and _target != null
+    _target_marker.visible = idle_or_windup and _target != null
     if _target_marker.visible:
         _target_marker.global_position = _target.global_position + Vector3.UP * target_marker_height
 
-    var charging: bool = _pod_state == PodState.CHARGING
+    var winding_up: bool = _pod_state == PodState.WINDUP
 
-    # 蓄力的可读性靠剪影：膜朝伪足将要伸出的方向鼓起、越蓄越长。
-    # 鼓在挥扫起点那一侧，顺便预告这一下从哪边扫过来
-    _bulge_mesh.visible = charging
+    # 重击聚合的可读性靠剪影：膜朝伪足将要伸出的方向鼓起、越聚越长（物质往伪足里流、聚合成刃）。
+    # 鼓在挥扫起点那一侧，顺便预告这一下从哪边扫过来。轻击没有这一段
+    _bulge_mesh.visible = winding_up
     if _bulge_mesh.visible:
-        var c: float = _current_charge()
-        var bulge_dir: Vector3 = _aim_dir.rotated(_swing_axis_for(_aim_dir), _swing_half_arc(c) * _swing_side)
+        var c: float = _windup_progress()
+        var bulge_dir: Vector3 = _aim_dir.rotated(_swing_axis_for(_aim_dir), _swing_half_arc(true) * _swing_side)
         var width: float = lerpf(0.35, 0.6, c)
         var length: float = lerpf(0.4, bulge_max_stretch, c)
         _bulge_mesh.transform = Transform3D(
@@ -1098,15 +1206,15 @@ func _update_visuals() -> void:
             bulge_dir * (body_radius * 0.6 + length * 0.25)
         )
 
-    _swing_preview.visible = show_reach_preview and charging
+    _swing_preview.visible = show_reach_preview and winding_up
     if _swing_preview.visible:
-        _draw_swing_preview(_current_reach_length(), _current_charge())
+        _draw_swing_preview(heavy_reach * _windup_progress(), _swing_half_arc(true))
 
-    _pod_mesh.visible = not idle_or_charging and _pod_length > 0.0
+    _pod_mesh.visible = not idle_or_windup and _pod_length > 0.0
     if _pod_mesh.visible:
-        # 伪足从细胞中心长出，总长 = 半径 + 伸出长度；蓄得越满越细，像被拉长
+        # 伪足从细胞中心长出，总长 = 半径 + 伸出长度；重击的刃更长更细
         var total: float = body_radius + _pod_length
-        var thickness: float = lerpf(1.0, 0.7, _attack_charge)
+        var thickness: float = lerpf(1.0, 0.7, _attack_strength)
         var dir: Vector3 = _pod_dir()
         _pod_mesh.transform = Transform3D(
             _basis_y_to(dir) * Basis.from_scale(Vector3(thickness, total, thickness)),
@@ -1115,13 +1223,12 @@ func _update_visuals() -> void:
 
 
 ## 扇形环带：从膜表面到伪足能伸到的距离，覆盖即将扫过的整个弧
-func _draw_swing_preview(reach: float, charge: float) -> void:
+func _draw_swing_preview(reach: float, half: float) -> void:
     var mesh := _swing_preview.mesh as ImmediateMesh
     if mesh == null:
         return
     mesh.clear_surfaces()
     var axis: Vector3 = _swing_axis_for(_aim_dir)
-    var half: float = _swing_half_arc(charge)
     var segments: int = maxi(2, ceili(rad_to_deg(half * 2.0) / 5.0))
     var inner: float = body_radius
     var outer: float = body_radius + reach
@@ -1151,14 +1258,18 @@ static func _basis_y_to(dir: Vector3) -> Basis:
 
 func get_debug_text() -> String:
     var state_name: String = PodState.keys()[_pod_state]
-    var charge: float = _current_charge() if _pod_state == PodState.CHARGING else _attack_charge
-    return "目标: %s   上下: [%s镜头] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   蓄力 %.2f   长度 %.1f / %.1f\n速度 %.1f" % [
+    var attack: String = "—"
+    if _combo_index > 0:
+        attack = "连段第 %d 段" % _combo_index
+    elif _attack_is_heavy and _pod_state != PodState.IDLE:
+        attack = "重击"
+    return "目标: %s   上下: [%s镜头] [%s方向]   攻击俯仰 %+.0f°\n伪足: %s   %s   长度 %.1f / %.1f\n速度 %.1f" % [
         str(_target.name) if _target != null else "无",
         "√" if vertical_from_camera else "×",
         "√" if directional_attacks else "×",
         rad_to_deg(asin(clampf(_aim_dir.y, -1.0, 1.0))),
         state_name,
-        charge,
+        attack,
         _pod_length,
         _current_reach_length(),
         velocity.length(),

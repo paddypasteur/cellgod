@@ -131,7 +131,10 @@ def main() -> None:
                     continue
                 per_min = lambda n: n / (secs / 60.0)
                 attacks = [r for r in sub if r["event"] == "attack" and not r["info"].startswith("auto")]
-                light = sum(float(r["info"]) <= 0.25 for r in attacks)
+                # 2026-11-27 之后 info 是 L1/L2…/H；之前是蓄力值（≤0.25 算轻击）
+                def is_light(info: str) -> bool:
+                    return info.startswith("L") if info[:1].isalpha() else float(info) <= 0.25
+                light = sum(is_light(r["info"]) for r in attacks)
                 heavy = len(attacks) - light
                 hits = sum(r["event"] == "hit" for r in sub)
                 hurts = sum(r["event"] == "hurt" for r in sub)
@@ -148,7 +151,20 @@ def main() -> None:
                 print(f"  [{names.get(v, v)}] 约 {secs:.0f} 秒：轻击 {per_min(light):.1f} / 重击 {per_min(heavy):.1f} 次/分钟，"
                       f"命中 {per_min(hits):.1f} / 受击 {per_min(hurts):.1f} / 闪避 {per_min(dodges_n):.1f} 次/分钟；"
                       f"命中后到下一次按键 中位数 {gap_txt}")
-        segment_report("打击感 A/B", "preset", ["A", "B"], {"A": "A 原来", "B": "B 新"})
+                # 2026-11-27 起：每一击挥完记 result（打中没有），每套轻击连段结束记 combo（打了几段）
+                results = [r for r in sub if r["event"] == "result" and not r["info"].startswith("auto")]
+                if results:
+                    def rate(prefix: str) -> str:
+                        rs = [r for r in results if r["info"].startswith(prefix)]
+                        if not rs:
+                            return "—"
+                        hit_n = sum(r["info"].endswith("/1") for r in rs)
+                        return f"{hit_n}/{len(rs)}={100 * hit_n / len(rs):.0f}%"
+                    combos = Counter(int(r["info"]) for r in sub if r["event"] == "combo")
+                    print(f"      命中率 轻击 {rate('L')}，重击 {rate('H')}；"
+                          f"连段长度（打了几段）{dict(sorted(combos.items()))}")
+        if any(r.get("preset") for r in rows):
+            segment_report("打击感 A/B", "preset", ["A", "B"], {"A": "A 原来", "B": "B 新"})
         segment_report("有无弹射（底盘自己站不站得住）", "bounce", ["0", "1"], {"0": "弹射关", "1": "弹射开"})
 
     hurt = events("hurt")

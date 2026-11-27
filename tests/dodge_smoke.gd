@@ -1,5 +1,5 @@
 extends SceneTree
-## 闪避冒烟测试（无界面）：往上躲、不推方向后撤、冷却、无敌帧、蓄力可闪、伪足伸出后不可闪。
+## 闪避冒烟测试（无界面）：往上躲、不推方向后撤、冷却、无敌帧、重击聚合可闪、重击伸出后不可闪、轻击收招可闪。
 ## 用法：godot --headless --path . -s tests/dodge_smoke.gd
 
 var _frame: int = 0
@@ -64,23 +64,34 @@ func _physics_process(_delta: float) -> bool:
             _check("不推方向 = 后撤", _p.velocity.z > 10.0, "vz=%.1f" % _p.velocity.z)
         140:
             _release(&"dodge")
-            _press(&"pseudopod")
-        150:
-            _check("开始蓄力", _p._pod_state == Player.PodState.CHARGING)
+            _press(&"heavy_attack")
+        146:
+            _check("重击进入聚合段", _p._pod_state == Player.PodState.WINDUP)
             _press(&"dodge")
-        152:
-            _check("蓄力中闪避会取消蓄力", _p.is_dodging() and _p._pod_state == Player.PodState.IDLE)
-            _release(&"pseudopod")
+        148:
+            _check("聚合中闪避会取消重击", _p.is_dodging() and _p._pod_state == Player.PodState.IDLE)
+            _release(&"heavy_attack")
             _release(&"dodge")
         220:
-            _press(&"pseudopod")
-        223:
-            _release(&"pseudopod")
-        232:
-            _check("伪足已伸出", _p._pod_state != Player.PodState.IDLE and _p._pod_state != Player.PodState.CHARGING,
+            _press(&"heavy_attack")
+        221:
+            _release(&"heavy_attack")
+        250:
+            _check("重击已伸出", _p._pod_state in [Player.PodState.EXTENDING, Player.PodState.SWEEPING, Player.PodState.HOLDING],
                 Player.PodState.keys()[_p._pod_state])
             _press(&"dodge")
-        234:
-            _check("伪足伸出后不能闪避", not _p.is_dodging())
+        252:
+            _check("重击伸出后不能闪避", not _p.is_dodging())
+            _release(&"dodge")
+        330:
+            _press(&"pseudopod")
+        331:
+            _release(&"pseudopod")
+        341:
+            _check("轻击挥完进入收招", _p._pod_state in [Player.PodState.HOLDING, Player.PodState.RETRACTING],
+                Player.PodState.keys()[_p._pod_state])
+            _press(&"dodge")
+        343:
+            _check("轻击收招可以闪避取消", _p.is_dodging() and _p._pod_state == Player.PodState.IDLE)
             return true
     return false

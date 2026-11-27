@@ -14,8 +14,11 @@ extends Node
 ##   strike    弹射到达后的自动轻击结束；info = 1 打中 / 0 落空（经常落空 = 到达时是懵的）
 ##   chain     一条连招链结束；info = "打中几下/弹射几次/结束原因"
 ##   arrive    弹射飞到目标身边（算"落地后 1 秒内被打中"用）
-##   attack    玩家出了一击；info = 蓄力值（≤0.25 算轻击），弹射的自动轻击 info 前面加 auto
-##   hit       打中一个目标；info = 蓄力值
+##   attack    玩家出了一击；info = L1/L2/L3…（轻击第几段）、H（重击）、auto（弹射到达后的自动轻击）。
+##             2026-11-27 之前的记录这里是蓄力值（≤0.25 算轻击）
+##   result    一击挥完；info = "类型/1 或 0"（打中没有），算命中率用
+##   combo     一套轻击连段结束；info = 这套打了几段
+##   hit       打中一个目标；info = 力度（轻 0 / 重 1）
 ##   input     玩家按下攻击或闪避；info = 动作名（算"命中后到下一次输入的间隔"用）
 ## preset 列 = 当时在测的 A/B（2026-11-27 打击感 A/B 结束后暂时为空）；bounce 列 = 弹射能力开（1）/关（0）
 ##   chain 的结束原因 no_target = 窗口里推了方向按了攻击，但锥形里没目标（想弹没弹出来）
@@ -67,7 +70,10 @@ func _ready() -> void:
     player.bounce_strike.connect(_on_bounce_strike)
     player.chain_ended.connect(_on_chain_ended)
     player.bounce_arrived.connect(func() -> void: _write("arrive", 0.0, NAN, -1))
-    player.attack_launched.connect(_on_attack_launched)
+    player.attack_launched.connect(func(kind: String) -> void: _write("attack", 0.0, NAN, -1, kind))
+    player.attack_resolved.connect(func(kind: String, hit: bool) -> void:
+        _write("result", 0.0, NAN, -1, "%s/%d" % [kind, 1 if hit else 0]))
+    player.combo_ended.connect(func(length: int) -> void: _write("combo", 0.0, NAN, -1, str(length)))
     player.hit_landed.connect(func(_t: Node, charge: float) -> void: _write("hit", 0.0, NAN, -1, "%.2f" % charge))
     player.health_changed.connect(_on_health_changed)
     _last_health = player.health
@@ -114,12 +120,10 @@ func _input(event: InputEvent) -> void:
         return
     if event.is_action_pressed(&"pseudopod"):
         _write("input", 0.0, NAN, -1, "attack")
+    elif event.is_action_pressed(&"heavy_attack"):
+        _write("input", 0.0, NAN, -1, "heavy")
     elif event.is_action_pressed(&"dodge"):
         _write("input", 0.0, NAN, -1, "dodge")
-
-
-func _on_attack_launched(charge: float, auto: bool) -> void:
-    _write("attack", 0.0, NAN, -1, ("auto%.2f" if auto else "%.2f") % charge)
 
 
 func _on_bounced(direction: Vector3, chain_index: int) -> void:

@@ -3,8 +3,8 @@ extends Node
 ## 只在 项目设置→输入映射 里没有同名动作时才注册，
 ## 所以开发者在编辑器里定义的键位永远优先，这里只是兜底。
 ##
-## 手柄：左摇杆移动，LB/LT 上升/下降，右摇杆转镜头，RT 按住蓄力，B 闪避
-## 键鼠（临时占位，方案未定）：WASD 移动，空格/Shift 上升/下降，左键按住蓄力，右键闪避；
+## 手柄：左摇杆移动，LB/LT 上升/下降，右摇杆转镜头，RT 轻击（连按出连段），RB 重击，B 闪避
+## 键鼠（临时占位，方案未定）：WASD 移动，空格/Shift 上升/下降，左键轻击，E 重击，右键闪避；
 ##       暂时没有鼠标转镜头
 
 const DEFAULT_DEADZONE: float = 0.2
@@ -36,7 +36,10 @@ func _enter_tree() -> void:
     # 闪避：手柄 B（类魂惯例），键鼠临时用右键
     _add_action(&"dodge", [_mouse(MOUSE_BUTTON_RIGHT), _joy_button(JOY_BUTTON_B)])
 
+    # 轻击（连按出连段）。2026-11-27 起不再蓄力，按下即出手
     _add_action(&"pseudopod", [_mouse(MOUSE_BUTTON_LEFT), _joy_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)])
+    # 重击：独立按键（不是蓄力）。RB 在上下移动挪到左手后空出来了
+    _add_action(&"heavy_attack", [_key(KEY_E), _joy_button(JOY_BUTTON_RIGHT_SHOULDER)])
 
 
 func _add_action(action: StringName, events: Array) -> void:
