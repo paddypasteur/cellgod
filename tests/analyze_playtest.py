@@ -70,35 +70,86 @@ def main() -> None:
     duration_min = max(float(r["t"]) for r in rows) / 60.0
     print(f"闪避频率 {len(dodges) / max(duration_min, 0.01):.1f} 次/分钟（弹射上线后骤减 = 弹射太安全）")
 
-    # ---- 连招弹射（2026-11-26 起的记录才有）
+    # 2026-11-27 起的记录有 bounce 列，preset 列的含义是"打击感 A/B"；
+    # 之前（11-26 晚）的记录 preset 列是"弹射窗口 A 短 / B 长"，两者不能混着读
+    new_format = "bounce" in (rows[0].keys() if rows else [])
     bounces = events("bounce")
+
+    # ---- 垂直使用率（2026-11-26 策划定：闪避和弹射合起来算，同时分别报）
+    def is_vertical(r: dict) -> bool:
+        return abs(float(r["elev_deg"])) >= 20
+    moves_3d = dodges + bounces
+    if moves_3d:
+        v_d = sum(map(is_vertical, dodges))
+        v_b = sum(map(is_vertical, bounces))
+        print(f"垂直使用率（闪避+弹射）{100 * (v_d + v_b) / len(moves_3d):.0f}%："
+              f"闪避 {v_d}/{len(dodges)}，弹射 {v_b}/{len(bounces)}")
+
+    # ---- 连招弹射
     chains = events("chain")
-    strikes = events("strike")
     if bounces or chains:
         print("—— 连招弹射 ——")
-        # 有 A/B 在测时按预设分开；没有（preset 列为空）就整体算一组
-        letters = sorted({r.get("preset") or "" for r in rows})
-        groups = [(p, f"预设 {p}") for p in letters if p] or [("", "全部")]
+        if new_format:
+            groups = [(None, "全部")]
+        else:
+            letters = sorted({r.get("preset") or "" for r in rows} - {""})
+            groups = [(p, f"弹射窗口 {p}") for p in letters] or [(None, "全部")]
         for letter, label in groups:
-            sub_chains = [r for r in chains if (r.get("preset") or "") == letter]
-            secs = sum(r["event"] == "sample" and (r.get("preset") or "") == letter for r in rows) * 0.5
-            if not sub_chains and secs == 0:
+            match = (lambda r: True) if letter is None else (lambda r, p=letter: r.get("preset") == p)
+            sub_chains = [r for r in chains if match(r)]
+            secs = sum(r["event"] == "sample" and match(r) for r in rows) * 0.5
+            if not sub_chains:
                 continue
             lengths = Counter(int(r["info"].split("/")[0]) for r in sub_chains)
             reasons = Counter(r["info"].split("/")[2] for r in sub_chains)
-            sub_dodges = sum(r["event"] == "dodge" and (r.get("preset") or "") == letter for r in rows)
             print(f"  [{label}] 约 {secs:.0f} 秒，连招链 {len(sub_chains)} 条；"
-                  f"链长（打中几下）{dict(sorted(lengths.items()))}；结束原因 {dict(reasons)}；"
-                  f"闪避 {sub_dodges / max(secs / 60.0, 0.01):.1f} 次/分钟")
-        b_elev = [float(r["elev_deg"]) for r in bounces]
-        if b_elev:
-            up = sum(e >= 20 for e in b_elev)
-            down = sum(e <= -20 for e in b_elev)
-            print(f"  弹射 {len(b_elev)} 次：水平 {len(b_elev) - up - down} / 往上 {up} / 往下 {down}"
-                  f"（垂直占 {100 * (up + down) / len(b_elev):.0f}%）")
-        if strikes:
-            hit = sum(r["info"] == "1" for r in strikes)
-            print(f"  弹射到达后的自动轻击：{hit}/{len(strikes)} 打中（经常落空 = 到达时是懵的）")
+                  f"链长（打中几下）{dict(sorted(lengths.items()))}；结束原因 {dict(reasons)}")
+        # 落地后 1 秒内被打中的比例，对比"不在弹射时任意 1 秒被打中的概率"（基线）。
+        # 单看落地数字没意义——可能只是当时敌人本来就在打；差值才说明"落地那一刻看不清周围"
+        arrivals = [float(r["t"]) for r in events("arrive")]
+        hurt_t = [float(r["t"]) for r in events("hurt")]
+        if arrivals:
+            hit_after = sum(any(a < h <= a + 1.0 for h in hurt_t) for a in arrivals)
+            bounce_starts = [float(r["t"]) for r in bounces]
+            def in_bounce_or_aftermath(t: float) -> bool:
+                return any(a - 0.0 <= t <= a + 1.0 for a in arrivals) or \
+                    any(b <= t <= min([a for a in arrivals if a >= b], default=b + 1.0) for b in bounce_starts)
+            base = [float(r["t"]) for r in events("sample") if not in_bounce_or_aftermath(float(r["t"]))]
+            base_hit = sum(any(t < h <= t + 1.0 for h in hurt_t) for t in base)
+            print(f"  落地后 1 秒内被打中：{hit_after}/{len(arrivals)} = {100 * hit_after / len(arrivals):.0f}%；"
+                  f"基线（不在弹射时任意 1 秒）：{100 * base_hit / max(len(base), 1):.0f}%"
+                  f"（落地明显高于基线 = 落地那一刻看不清周围）")
+
+    # ---- 打击感 A/B 与"有无弹射"（2026-11-27 起）
+    if new_format:
+        def segment_report(title: str, key: str, values: list, names: dict) -> None:
+            print(f"—— {title} ——")
+            for v in values:
+                sub = [r for r in rows if r.get(key) == v]
+                secs = sum(r["event"] == "sample" for r in sub) * 0.5
+                if secs < 1:
+                    continue
+                per_min = lambda n: n / (secs / 60.0)
+                attacks = [r for r in sub if r["event"] == "attack" and not r["info"].startswith("auto")]
+                light = sum(float(r["info"]) <= 0.25 for r in attacks)
+                heavy = len(attacks) - light
+                hits = sum(r["event"] == "hit" for r in sub)
+                hurts = sum(r["event"] == "hurt" for r in sub)
+                dodges_n = sum(r["event"] == "dodge" for r in sub)
+                # 命中后到下一次按键（攻击或闪避）的间隔；同一时刻扫中多个只算一次；超过 3 秒不算（那是停手了）
+                hit_times = sorted({float(r["t"]) for r in sub if r["event"] == "hit"})
+                input_times = sorted(float(r["t"]) for r in sub if r["event"] == "input")
+                gaps = []
+                for h in hit_times:
+                    nxt = next((t for t in input_times if t > h), None)
+                    if nxt is not None and nxt - h <= 3.0:
+                        gaps.append(nxt - h)
+                gap_txt = f"{statistics.median(gaps) * 1000:.0f} ms（{len(gaps)} 次）" if gaps else "无数据"
+                print(f"  [{names.get(v, v)}] 约 {secs:.0f} 秒：轻击 {per_min(light):.1f} / 重击 {per_min(heavy):.1f} 次/分钟，"
+                      f"命中 {per_min(hits):.1f} / 受击 {per_min(hurts):.1f} / 闪避 {per_min(dodges_n):.1f} 次/分钟；"
+                      f"命中后到下一次按键 中位数 {gap_txt}")
+        segment_report("打击感 A/B", "preset", ["A", "B"], {"A": "A 原来", "B": "B 新"})
+        segment_report("有无弹射（底盘自己站不站得住）", "bounce", ["0", "1"], {"0": "弹射关", "1": "弹射开"})
 
     hurt = events("hurt")
     print(f"受击 {len(hurt)} 次，攻击者起手位置：{dict(Counter(layer(r['rel_y']) for r in hurt))}")

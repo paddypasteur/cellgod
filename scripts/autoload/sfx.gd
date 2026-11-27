@@ -10,6 +10,7 @@ const POOL_SIZE: int = 6
 var volumes: Dictionary = {
     &"swing": -8.0,
     &"hit": -2.0,
+    &"hit_crisp": -1.0,
     &"windup": -4.0,
     &"hurt": -3.0,
 }
@@ -24,6 +25,7 @@ var _next_3d: int = 0
 func _ready() -> void:
     _streams[&"swing"] = _to_wav(_synth_swing())
     _streams[&"hit"] = _to_wav(_synth_hit())
+    _streams[&"hit_crisp"] = _to_wav(_synth_hit_crisp())
     _streams[&"windup"] = _to_wav(_synth_windup())
     _streams[&"hurt"] = _to_wav(_synth_hurt())
     for i: int in POOL_SIZE:
@@ -94,6 +96,36 @@ func _synth_hit() -> PackedFloat32Array:
         if float(i) / MIX_RATE < 0.008:
             s += randf_range(-1.0, 1.0) * 0.6
         out[i] = s
+    return out
+
+
+## 打击感 B 的命中音："紧绷的膜被切开"——有机、湿、但起音尖、很短，不能是金属叮当声，也不能糊。
+## 三层叠加：
+##   起音：高通噪声，几毫秒就衰减完，提供"切开"那一下的尖
+##   湿：带通噪声，几十毫秒衰减，提供"湿"和"撕开"的质感
+##   体：快速下滑的中低频正弦，很短，让它有分量但不发闷（旧命中音的闷就是因为这层太长太低）
+## 全长 0.09 秒；轻重由播放时的音高区分（重击更低更长）
+func _synth_hit_crisp() -> PackedFloat32Array:
+    var n: int = int(0.09 * MIX_RATE)
+    var out := PackedFloat32Array()
+    out.resize(n)
+    var prev_noise: float = 0.0
+    var band_lp: float = 0.0
+    var band_slow: float = 0.0
+    var phase: float = 0.0
+    for i: int in n:
+        var sec: float = float(i) / MIX_RATE
+        var noise: float = randf_range(-1.0, 1.0)
+        var attack: float = (noise - prev_noise) * 0.5 * exp(-sec * 250.0)
+        prev_noise = noise
+        band_lp += 0.35 * (noise - band_lp)
+        band_slow += 0.05 * (band_lp - band_slow)
+        var wet: float = (band_lp - band_slow) * 1.4 * exp(-sec * 45.0)
+        phase += TAU * (140.0 + 120.0 * exp(-sec * 40.0)) / MIX_RATE
+        var body: float = sin(phase) * 0.5 * exp(-sec * 35.0)
+        # 开头 1 毫秒淡入，避免数字爆音
+        var fade_in: float = minf(sec / 0.001, 1.0)
+        out[i] = (attack + wet + body) * fade_in
     return out
 
 

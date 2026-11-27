@@ -13,7 +13,11 @@ extends Node
 ##   bounce    玩家弹射；elev_deg = 朝目标方向的仰角；info = 本链第几次弹射
 ##   strike    弹射到达后的自动轻击结束；info = 1 打中 / 0 落空（经常落空 = 到达时是懵的）
 ##   chain     一条连招链结束；info = "打中几下/弹射几次/结束原因"
-## preset 列 = 当时在测的 A/B 预设（没有 A/B 在测时为空，列保留以便以后复用）
+##   arrive    弹射飞到目标身边（算"落地后 1 秒内被打中"用）
+##   attack    玩家出了一击；info = 蓄力值（≤0.25 算轻击），弹射的自动轻击 info 前面加 auto
+##   hit       打中一个目标；info = 蓄力值
+##   input     玩家按下攻击或闪避；info = 动作名（算"命中后到下一次输入的间隔"用）
+## preset 列 = 打击感 A/B；bounce 列 = 弹射能力开（1）/关（0）
 
 @export var player: Player
 ## 关掉就不写文件
@@ -54,13 +58,16 @@ func _ready() -> void:
     if _file == null:
         enabled = false
         return
-    _file.store_line("t,event,x,y,z,elev_deg,rel_y,on_screen,threats,preset,info")
+    _file.store_line("t,event,x,y,z,elev_deg,rel_y,on_screen,threats,preset,info,bounce")
     print("试玩记录写入 ", ProjectSettings.globalize_path(path))
     player.dodged.connect(_on_dodged)
     player.dodge_saved.connect(_on_dodge_saved)
     player.bounced.connect(_on_bounced)
     player.bounce_strike.connect(_on_bounce_strike)
     player.chain_ended.connect(_on_chain_ended)
+    player.bounce_arrived.connect(func() -> void: _write("arrive", 0.0, NAN, -1))
+    player.attack_launched.connect(_on_attack_launched)
+    player.hit_landed.connect(func(_t: Node, charge: float) -> void: _write("hit", 0.0, NAN, -1, "%.2f" % charge))
     player.health_changed.connect(_on_health_changed)
     _last_health = player.health
 
@@ -98,6 +105,20 @@ func _on_dodged(direction: Vector3) -> void:
     else:
         dodge_level += 1
     _write("dodge", elev, _nearest_threat_rel_y(), -1)
+
+
+## 用 _input 而不是 _unhandled_input：记录器只旁听，不能和玩家抢事件
+func _input(event: InputEvent) -> void:
+    if _file == null:
+        return
+    if event.is_action_pressed(&"pseudopod"):
+        _write("input", 0.0, NAN, -1, "attack")
+    elif event.is_action_pressed(&"dodge"):
+        _write("input", 0.0, NAN, -1, "dodge")
+
+
+func _on_attack_launched(charge: float, auto: bool) -> void:
+    _write("attack", 0.0, NAN, -1, ("auto%.2f" if auto else "%.2f") % charge)
 
 
 func _on_bounced(direction: Vector3, chain_index: int) -> void:
@@ -166,13 +187,14 @@ func _write(event: String, elev: float, rel_y: float, on_screen: int, info: Stri
     if _file == null:
         return
     var p: Vector3 = player.global_position
-    _file.store_line("%.2f,%s,%.2f,%.2f,%.2f,%.1f,%s,%s,%d,%s,%s" % [
+    _file.store_line("%.2f,%s,%.2f,%.2f,%.2f,%.1f,%s,%s,%d,%s,%s,%d" % [
         _time, event, p.x, p.y, p.z, elev,
         "" if is_nan(rel_y) else "%.2f" % rel_y,
         "" if on_screen < 0 else str(on_screen),
         _threat_count(),
-        "",
+        player.get_hit_feel_letter(),
         info,
+        1 if player.ability_chain_launch else 0,
     ])
     # 每行都落盘：试玩可能直接关窗口，不能指望正常退出时才写
     _file.flush()

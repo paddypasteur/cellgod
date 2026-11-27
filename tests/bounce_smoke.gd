@@ -31,6 +31,8 @@ func _initialize() -> void:
     scene.get_node("PlaytestLogger").set("enabled", false)
     root.add_child(scene)
     _p = scene.get_node("Player")
+    # 弹射 2026-11-26 起是默认关闭的能力
+    _p.ability_chain_launch = true
     _a = scene.get_node("Enemies/EnemySide")
     _b = scene.get_node("Enemies/EnemyAbove")
     _c = scene.get_node("Enemies/EnemyBelow")
