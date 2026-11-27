@@ -68,9 +68,14 @@ const STATE_LABELS: PackedStringArray = ["接近", "前摇", "攻击", "硬直",
 @export var recover_time: float = 0.9
 
 @export_group("表现")
+## 细胞观感（细菌族配色：暖色、病态，膜起伏更快更碎）。为空时用默认值。
+## 下面的状态颜色是染在膜上的
+@export var look: CellLook
 ## 前摇结束时膨胀到多大
 @export var windup_swell: float = 1.35
-@export var color_idle: Color = Color(0.45, 0.6, 0.25)
+## 前摇结束时边缘高光增强到几倍：膨胀 + 变色 + 发亮，起手一眼可读
+@export var windup_rim_boost: float = 2.5
+@export var color_idle: Color = Color(0.55, 0.62, 0.22)
 @export var color_windup: Color = Color(1.0, 0.45, 0.1)
 @export var color_attack: Color = Color(1.0, 0.15, 0.1)
 @export var color_recover: Color = Color(0.3, 0.35, 0.25)
@@ -96,7 +101,7 @@ var _lunge_travelled: float = 0.0
 var _attack_landed: bool = false
 var _spawn_position: Vector3 = Vector3.ZERO
 var _player: Player = null
-var _material: StandardMaterial3D = null
+var _material: ShaderMaterial = null
 
 @onready var _visual: Node3D = $Visual
 @onready var _mesh: MeshInstance3D = $Visual/Mesh
@@ -112,10 +117,7 @@ func _ready() -> void:
     _spawn_position = global_position
     _orbit_sign = 1.0 if randf() < 0.5 else -1.0
     _cooldown = randf_range(attack_cooldown_min, attack_cooldown_max)
-    # 复制材质，否则所有敌人共用一份，一只变色全部变色
-    var source := _mesh.get_active_material(0) as StandardMaterial3D
-    _material = (source.duplicate() as StandardMaterial3D) if source != null else StandardMaterial3D.new()
-    _mesh.material_override = _material
+    _apply_look()
     _find_player()
 
 
@@ -308,22 +310,43 @@ func take_hit(strength: float, direction: Vector3) -> void:
 
 # ---------------------------------------------------------------- 表现
 
+## 每只敌人一份膜材质（否则一只变色全部变色），再在杆状身体里放一个实核
+func _apply_look() -> void:
+    if look == null:
+        look = CellLook.bacteria_default()
+    _material = look.make_membrane_material()
+    _mesh.material_override = _material
+    var body := _mesh.mesh as CapsuleMesh
+    var core_mesh := CapsuleMesh.new()
+    var r: float = (body.radius if body != null else 0.45) * look.core_scale
+    core_mesh.radius = r
+    core_mesh.height = maxf((body.height if body != null else 1.8) * look.core_scale, r * 2.0)
+    core_mesh.material = look.make_core_material()
+    var core := MeshInstance3D.new()
+    core.name = "Core"
+    core.mesh = core_mesh
+    _mesh.add_child(core)
+
+
 func _update_visuals() -> void:
     var facing: Vector3 = _attack_dir if _state == State.WINDUP or _state == State.ATTACK else _dir_to_player()
     var scale_factor: float = 1.0
     var color: Color = color_idle
+    var rim: float = look.rim_strength
     match _state:
         State.WINDUP:
             var p: float = _windup_progress()
             scale_factor = lerpf(1.0, windup_swell, p)
             color = color_idle.lerp(color_windup, p)
+            rim = lerpf(look.rim_strength, look.rim_strength * windup_rim_boost, p)
         State.ATTACK:
             color = color_attack
         State.RECOVER, State.HITSTUN:
             color = color_recover
     if _flash_timer > 0.0:
         color = color_hurt
-    _material.albedo_color = color
+    _material.set_shader_parameter(&"base_color", color)
+    _material.set_shader_parameter(&"rim_strength", rim)
     # 杆状身体的长轴指向攻击/玩家方向，冲刺方向一眼可读
     _visual.basis = _basis_facing(facing).scaled(Vector3.ONE * scale_factor)
     var arrow: String = ""

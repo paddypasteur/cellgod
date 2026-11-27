@@ -240,6 +240,8 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export var show_reach_preview: bool = true
 ## 重击聚合到最后时膜鼓起部分沿攻击方向拉长到多少（相对身体直径）
 @export var bulge_max_stretch: float = 1.2
+## 细胞观感（半透明膜 + 实核 + 膜流动 + 边缘高光）。免疫族配色；为空时用默认值
+@export var look: CellLook
 
 ## 竞技场边界由 Arena 在运行时写入，不在这里调
 var arena_center: Vector3 = Vector3.ZERO
@@ -249,8 +251,11 @@ var health: float = 0.0
 var _invuln_timer: float = 0.0
 var _stun_timer: float = 0.0
 var _hurt_flash_timer: float = 0.0
-var _body_material: StandardMaterial3D = null
+## 身体膜的材质（受击闪红、无敌发白等都改它的颜色参数）
+var _body_material: ShaderMaterial = null
 var _body_base_color: Color = Color.WHITE
+## 伪足的材质：挥击时硬化成刃（hardness=1），收回时软回去
+var _pod_material: ShaderMaterial = null
 
 var _dodge_timer: float = 0.0
 var _dodge_cooldown_timer: float = 0.0
@@ -351,12 +356,7 @@ func _ready() -> void:
     _pod_query.exclude = [get_rid()]
     health = max_health
     _ensure_tiers()
-    # 复制身体材质用于受击闪红，不改动场景里的原材质
-    var source := _body_mesh.get_active_material(0) as StandardMaterial3D
-    if source != null:
-        _body_material = source.duplicate() as StandardMaterial3D
-        _body_mesh.material_override = _body_material
-        _body_base_color = _body_material.albedo_color
+    _apply_look()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -810,6 +810,28 @@ func _spawn_hit_fx(target: Node3D, tier: HitTier) -> void:
     HitFx.spawn(parent, hit_point, spray, slash, tier, fx_cytoplasm_color, fx_membrane_color)
 
 
+## 把观感资源套到身体、伪足、鼓包上，并在身体里放一个实核。
+## 核用代码生成而不是放进场景：它的大小和位置是观感参数的一部分，跟着 CellLook 走
+func _apply_look() -> void:
+    if look == null:
+        look = CellLook.immune_default()
+    _body_material = look.make_membrane_material()
+    _body_mesh.material_override = _body_material
+    _body_base_color = look.membrane_color
+    _pod_material = look.make_membrane_material()
+    _pod_mesh.material_override = _pod_material
+    _bulge_mesh.material_override = look.make_membrane_material()
+    var core_mesh := SphereMesh.new()
+    core_mesh.radius = body_radius * look.core_scale
+    core_mesh.height = body_radius * look.core_scale * 2.0
+    core_mesh.material = look.make_core_material()
+    var core := MeshInstance3D.new()
+    core.name = "Core"
+    core.mesh = core_mesh
+    core.position = look.core_offset * body_radius * 2.0
+    _body_mesh.add_child(core)
+
+
 ## 五档里没在检查器里配的，填上默认值。轻击压在最低档；受击比以前（定格 0.06、抖 0.6）往上调了一点
 func _ensure_tiers() -> void:
     if tier_light_hit == null:
@@ -1206,7 +1228,7 @@ func _update_visuals() -> void:
         # 弹射窗口开着时身体发黄：窗口只有零点几秒，不提示的话玩家不知道它存在
         elif _bounce_window > 0.0:
             color = color.lerp(bounce_window_tint, 0.7)
-        _body_material.albedo_color = color
+        _body_material.set_shader_parameter(&"base_color", color)
 
     _aim_marker.visible = idle_or_windup
     if _aim_marker.visible:
@@ -1246,6 +1268,12 @@ func _update_visuals() -> void:
             _basis_y_to(dir) * Basis.from_scale(Vector3(thickness, total, thickness)),
             dir * total * 0.5
         )
+        # 伪足聚合成刃：伸出、挥、停留时是硬的（不起伏、不透明、高光锐），收回时随长度软回去（解聚）
+        if _pod_material != null:
+            var hard: float = 1.0
+            if _pod_state == PodState.RETRACTING:
+                hard = clampf(_pod_length / maxf(_target_length, 0.001), 0.0, 1.0)
+            _pod_material.set_shader_parameter(&"hardness", hard)
 
 
 ## 扇形环带：从膜表面到伪足能伸到的距离，覆盖即将扫过的整个弧
