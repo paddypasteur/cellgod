@@ -24,9 +24,6 @@ signal bounce_arrived
 ## 发出一击（记录轻/重击频率用）。auto = 弹射到达后的自动轻击
 signal attack_launched(charge: float, auto: bool)
 
-## 打击感整体 A/B（策划 2026-11-27：四项捆成一个开关，开发者只回答"哪个更有劲"）
-const HIT_FEEL_NAMES: PackedStringArray = ["A 现在", "B 新"]
-
 enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 
 @export_group("移动")
@@ -160,20 +157,20 @@ enum PodState { IDLE, CHARGING, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 提前按下的闪避记住多久（秒）
 @export var dodge_buffer_time: float = 0.15
 
-@export_group("打击感（A/B）")
-## 0 = A（原来那套），1 = B（命中镜头抖 + 命中急停 + 脆命中音 + 轻击无伸出段）。F2 / 十字键上切换
-@export var hit_feel_preset: int = 0
-## B：命中时镜头抖动强度（0..1，镜头那边按平方换算成位移，所以小值几乎只有一丝）。
+@export_group("打击感")
+## 2026-11-27 A/B：原来那套 vs 下面四项（命中镜头抖、命中急停、脆命中音、轻击无伸出段），
+## 开发者选后者："B 好一点"；行为上出招频率翻倍、命中后到下一次按键从 265 ms 缩到 130 ms。旧那套已删除
+## 命中时镜头抖动强度（0..1，镜头那边按平方换算成位移，所以小值几乎只有一丝）。
 ## 必须远小于受击抖动（0.6）：轻击一秒可能命中好几次，每次都明显抖会晕
 @export_range(0.0, 1.0) var hit_shake_light: float = 0.12
 @export_range(0.0, 1.0) var hit_shake_heavy: float = 0.4
-## B：命中瞬间保留多少速度（0 = 完全刹停）。冲势被打断比被弹开更像砍到了实物
+## 命中瞬间保留多少速度（0 = 完全刹停）。冲势被打断比被弹开更像砍到了实物
 @export_range(0.0, 1.0) var hit_brake_keep: float = 0.15
-## B：命中后多久不吃移动输入、速度快速衰减（秒）
+## 命中后多久不吃移动输入、速度快速衰减（秒）
 @export var hit_brake_time: float = 0.08
-## B：蓄力不超过这个值的算轻击——轻击没有伸出段，刃在挥的过程中沿弧线成型
+## 蓄力不超过这个值的算轻击——轻击没有伸出段，刃在挥的过程中沿弧线成型
 @export_range(0.0, 1.0) var light_max_charge: float = 0.25
-## B：轻击挥扫开始时刃有多长（相对完整长度），挥到一半时长满
+## 轻击挥扫开始时刃有多长（相对完整长度），挥到一半时长满
 @export_range(0.1, 1.0) var light_form_start: float = 0.35
 
 @export_group("连招弹射")
@@ -261,6 +258,10 @@ var _chain_bounces: int = 0
 ## 本条链打过的敌人，不能再弹向它们（逼玩家规划路线）
 var _chain_visited: Array[int] = []
 
+## 窗口内推了方向、按了攻击，但锥形里没找到目标（这次会退回原地接招）。
+## 用来区分"不想弹"和"想弹但没弹出来"——后者多说明弹射难触发
+var _bounce_attempt_failed: bool = false
+
 ## B 预设：命中急停剩余时间
 var _brake_timer: float = 0.0
 ## B 预设：本次轻击的刃正在沿弧线成型（没有伸出段）
@@ -336,8 +337,6 @@ func _unhandled_input(event: InputEvent) -> void:
         _buffer_timer = input_buffer_time
     elif event.is_action_pressed(&"dodge"):
         _dodge_buffer = dodge_buffer_time
-    elif event.is_action_pressed(&"cycle_preset"):
-        hit_feel_preset = (hit_feel_preset + 1) % HIT_FEEL_NAMES.size()
     elif event.is_action_pressed(&"toggle_ability"):
         ability_chain_launch = not ability_chain_launch
         if not ability_chain_launch:
@@ -622,8 +621,10 @@ func _release() -> void:
 ## 发出一击。auto = 弹射到达后的自动轻击：它属于当前连招链；玩家自己出的招则开始新的链
 func _launch_attack(charge: float, direction: Vector3, auto: bool) -> void:
     if not auto:
-        # 窗口里不指方向按攻击 = 原地接招，按规格这不是弹射，旧链到此结束
-        _end_chain("followup")
+        # 窗口里不指方向按攻击 = 原地接招，按规格这不是弹射，旧链到此结束。
+        # 推了方向但锥形里没目标的单独记成 no_target
+        _end_chain("no_target" if _bounce_attempt_failed else "followup")
+    _bounce_attempt_failed = false
     _auto_attack = auto
     _attack_hit_any = false
     _bounce_window = 0.0
@@ -643,9 +644,9 @@ func _launch_attack(charge: float, direction: Vector3, auto: bool) -> void:
     if swing_alternate:
         _swing_side = -_swing_side
     attack_launched.emit(charge, auto)
-    _light_forming = is_hit_feel_b() and charge <= light_max_charge
+    _light_forming = charge <= light_max_charge
     if _light_forming:
-        # B 的轻击：聚合与挥击合并，没有"先伸后挥"，出手即到位。重击仍然走伸出段（风险住在那里）
+        # 轻击：聚合与挥击合并，没有"先伸后挥"，出手即到位。重击仍然走伸出段（风险住在那里）
         _pod_length = _target_length * light_form_start
         _pod_state = PodState.SWEEPING
         _play_sfx(&"swing", lerpf(1.15, 0.8, _attack_charge))
@@ -653,10 +654,6 @@ func _launch_attack(charge: float, direction: Vector3, auto: bool) -> void:
             _enter_hold()
     else:
         _pod_state = PodState.EXTENDING
-
-
-func is_hit_feel_b() -> bool:
-    return hit_feel_preset == 1
 
 
 func _enter_hold() -> void:
@@ -683,18 +680,15 @@ func _deal_hit(target: Object, direction: Vector3) -> void:
         hit_landed.emit(target, _attack_charge)
     var first_hit_of_attack: bool = not _attack_hit_any
     _on_chain_hit(target)
-    if is_hit_feel_b():
-        _play_sfx(&"hit_crisp", lerpf(1.15, 0.8, _attack_charge))
-        # 命中也抖镜头，但远小于受击，且随蓄力缩放：轻击几乎只有一丝，重击才明显
-        var cam := get_viewport().get_camera_3d() as FollowCamera
-        if cam != null:
-            cam.add_shake(lerpf(hit_shake_light, hit_shake_heavy, _attack_charge))
-        # 命中急停：一击只刹一次，一刀扫中多个时不重复刹
-        if first_hit_of_attack and not _bouncing:
-            velocity *= hit_brake_keep
-            _brake_timer = hit_brake_time
-    else:
-        _play_sfx(&"hit", lerpf(1.2, 0.75, _attack_charge))
+    _play_sfx(&"hit_crisp", lerpf(1.15, 0.8, _attack_charge))
+    # 命中也抖镜头，但远小于受击，且随蓄力缩放：轻击几乎只有一丝，重击才明显
+    var cam := get_viewport().get_camera_3d() as FollowCamera
+    if cam != null:
+        cam.add_shake(lerpf(hit_shake_light, hit_shake_heavy, _attack_charge))
+    # 命中急停：一击只刹一次，一刀扫中多个时不重复刹
+    if first_hit_of_attack and not _bouncing:
+        velocity *= hit_brake_keep
+        _brake_timer = hit_brake_time
     # 按路径取 autoload 而不是直接写 HitStop：单脚本语法检查不加载 autoload，
     # 直接引用会让 --check-only 报"找不到标识符"
     var hit_stop: Node = get_node_or_null(^"/root/HitStop")
@@ -846,6 +840,7 @@ func _try_start_bounce() -> void:
         return
     var target: Node3D = _find_bounce_target(wish.normalized())
     if target == null:
+        _bounce_attempt_failed = true
         return
     _buffer_timer = 0.0
     _bounce_window = 0.0
@@ -934,6 +929,8 @@ func _compute_arrive_offset(target: Node3D) -> Vector3:
 
 func _end_chain(reason: String) -> void:
     _bounce_window = 0.0
+    if reason != "no_target" and reason != "followup":
+        _bounce_attempt_failed = false
     if not _chain_active:
         return
     _chain_active = false
@@ -979,20 +976,12 @@ func is_dodging() -> bool:
     return _dodge_timer > 0.0
 
 
-## 血条下面那行提示：两个开关的当前状态常驻（试玩时开发者要知道自己在玩哪个组合），闪避冷却中再加一句
+## 血条下面那行提示：弹射开关状态常驻（试玩时开发者要知道自己在玩哪种），闪避冷却中再加一句
 func get_hud_hint() -> String:
-    var hint: String = "打击感：%s（F2 / 十字键上）    弹射：%s（F3 / 十字键下）" % [
-        HIT_FEEL_NAMES[clampi(hit_feel_preset, 0, HIT_FEEL_NAMES.size() - 1)],
-        "开" if ability_chain_launch else "关",
-    ]
+    var hint: String = "弹射：%s（F3 / 十字键下）" % ("开" if ability_chain_launch else "关")
     if _dodge_cooldown_timer > 0.0:
         hint += "    闪避冷却中"
     return hint
-
-
-## 试玩记录用
-func get_hit_feel_letter() -> String:
-    return HIT_FEEL_NAMES[clampi(hit_feel_preset, 0, HIT_FEEL_NAMES.size() - 1)].substr(0, 1)
 
 
 ## 敌人攻击命中时调用。返回 false 表示处于无敌时间、这一下没生效

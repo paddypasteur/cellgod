@@ -17,7 +17,8 @@ extends Node
 ##   attack    玩家出了一击；info = 蓄力值（≤0.25 算轻击），弹射的自动轻击 info 前面加 auto
 ##   hit       打中一个目标；info = 蓄力值
 ##   input     玩家按下攻击或闪避；info = 动作名（算"命中后到下一次输入的间隔"用）
-## preset 列 = 打击感 A/B；bounce 列 = 弹射能力开（1）/关（0）
+## preset 列 = 当时在测的 A/B（2026-11-27 打击感 A/B 结束后暂时为空）；bounce 列 = 弹射能力开（1）/关（0）
+##   chain 的结束原因 no_target = 窗口里推了方向按了攻击，但锥形里没目标（想弹没弹出来）
 
 @export var player: Player
 ## 关掉就不写文件
@@ -192,7 +193,7 @@ func _write(event: String, elev: float, rel_y: float, on_screen: int, info: Stri
         "" if is_nan(rel_y) else "%.2f" % rel_y,
         "" if on_screen < 0 else str(on_screen),
         _threat_count(),
-        player.get_hit_feel_letter(),
+        "",
         info,
         1 if player.ability_chain_launch else 0,
     ])

@@ -1,7 +1,8 @@
 extends Node
 ## 原型占位音效：全部用代码合成，不引入音频文件（白盒阶段不加素材）。
 ## 音效算手感不算美术，所以现在就要有；但只求"能响、能分辨"，不求好听。
-## 四个音：swing 挥击、hit 命中、windup 敌人起手（3D 定位）、hurt 玩家受击。
+## 四个音：swing 挥击、hit_crisp 命中、windup 敌人起手（3D 定位）、hurt 玩家受击。
+## （旧的闷响命中音 hit 在 2026-11-27 打击感 A/B 后删除，在 9c20e91 里能找回）
 
 const MIX_RATE: int = 22050
 const POOL_SIZE: int = 6
@@ -9,7 +10,6 @@ const POOL_SIZE: int = 6
 ## 各音效音量（分贝）
 var volumes: Dictionary = {
     &"swing": -8.0,
-    &"hit": -2.0,
     &"hit_crisp": -1.0,
     &"windup": -4.0,
     &"hurt": -3.0,
@@ -24,7 +24,6 @@ var _next_3d: int = 0
 
 func _ready() -> void:
     _streams[&"swing"] = _to_wav(_synth_swing())
-    _streams[&"hit"] = _to_wav(_synth_hit())
     _streams[&"hit_crisp"] = _to_wav(_synth_hit_crisp())
     _streams[&"windup"] = _to_wav(_synth_windup())
     _streams[&"hurt"] = _to_wav(_synth_hurt())
@@ -80,22 +79,6 @@ func _synth_swing() -> PackedFloat32Array:
         lp += lerpf(0.5, 0.05, t) * (randf_range(-1.0, 1.0) - lp)
         var env: float = minf(t / 0.1, 1.0) * (1.0 - t)
         out[i] = lp * env * 2.5
-    return out
-
-
-## 闷响：快速下滑的低频正弦 + 开头一点噪声做"咔"
-func _synth_hit() -> PackedFloat32Array:
-    var n: int = int(0.16 * MIX_RATE)
-    var out := PackedFloat32Array()
-    out.resize(n)
-    var phase: float = 0.0
-    for i: int in n:
-        var t: float = float(i) / n
-        phase += TAU * (45.0 + 115.0 * exp(-t * 6.0)) / MIX_RATE
-        var s: float = sin(phase) * exp(-t * 5.0)
-        if float(i) / MIX_RATE < 0.008:
-            s += randf_range(-1.0, 1.0) * 0.6
-        out[i] = s
     return out
 
 

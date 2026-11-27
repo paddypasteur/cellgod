@@ -1,7 +1,8 @@
 extends SceneTree
-## 打击感 A/B 冒烟测试（无界面）。正前方 2 米冻住一只敌人，分别在 A、B 下轻击和重击它。
-## 检查：B 轻击没有伸出段、命中会抖镜头、命中会急停；B 重击仍有伸出段；A 命中不抖镜头；
-##       弹射默认关闭时命中不开窗口；B 的命中音已合成。
+## 打击感冒烟测试（无界面）。正前方 2 米冻住一只敌人，轻击和重击它。
+## 检查：轻击没有伸出段、命中会抖镜头、命中会急停；重击仍有伸出段且抖得更明显；
+##       弹射默认关闭时命中不开窗口；命中音已合成。
+## （2026-11-27 打击感 A/B 选定 B，A 已删除，这里只测现在这一套）
 ## 用法：godot --headless --path . -s tests/hit_feel_smoke.gd
 
 var _frame: int = 0
@@ -51,8 +52,7 @@ func _check(label: String, ok: bool, detail: String = "") -> void:
 
 
 ## 开始一次攻击：按住 hold_frames 帧后松开。同时推着前进，用来检验命中急停
-func _start_attack(preset: int, hold_frames: int) -> void:
-    _p.hit_feel_preset = preset
+func _start_attack(hold_frames: int) -> void:
     _enemy.global_position = Vector3(0.0, 0.0, -2.2)
     _enemy.health = _enemy.max_health
     _p.global_position = Vector3.ZERO
@@ -93,37 +93,30 @@ func _physics_process(_delta: float) -> bool:
         _enemy.set_physics_process(false)
         _check("弹射默认关闭", not _p.ability_chain_launch)
         var sfx: Node = root.get_node_or_null(^"Sfx")
-        _check("B 的命中音已合成", sfx != null and (sfx.get("_streams") as Dictionary).has(&"hit_crisp"))
+        _check("命中音已合成", sfx != null and (sfx.get("_streams") as Dictionary).has(&"hit_crisp"))
     if _frame < 60:
         return false
 
     match _phase:
         0:
             Input.action_press(&"move_forward")
-            _start_attack(1, 3)
+            _start_attack(3)
             _phase = 1
         1:
             if _track_attack():
-                _check("B 轻击：没有伸出段", not _states_seen.has("EXTENDING"), " -> ".join(_states_seen))
-                _check("B 轻击：打中", _hit_seen_this_attack)
-                _check("B 轻击：命中抖镜头（很小）", _trauma_at_hit > 0.0 and _trauma_at_hit < 0.3, "trauma=%.2f" % _trauma_at_hit)
-                _check("B：命中急停", _speed_after_hit < _speed_before_hit * 0.5,
+                _check("轻击：没有伸出段", not _states_seen.has("EXTENDING"), " -> ".join(_states_seen))
+                _check("轻击：打中", _hit_seen_this_attack)
+                _check("轻击：命中抖镜头（很小）", _trauma_at_hit > 0.0 and _trauma_at_hit < 0.3, "trauma=%.2f" % _trauma_at_hit)
+                _check("命中急停", _speed_after_hit < _speed_before_hit * 0.5,
                     "命中前 %.2f → 命中后 %.2f 米/秒" % [_speed_before_hit, _speed_after_hit])
-                _check("B：命中不开弹射窗口（能力关）", _p._bounce_window <= 0.0)
-                print("     B 轻击：按下到开始挥 %.0f ms" % ((_sweep_frame - _press_frame) * 1000.0 / 60.0))
-                _start_attack(1, 40)
+                _check("命中不开弹射窗口（能力关）", _p._bounce_window <= 0.0)
+                print("     轻击：按下到开始挥 %.0f ms" % ((_sweep_frame - _press_frame) * 1000.0 / 60.0))
+                _start_attack(40)
                 _phase = 2
         2:
             if _track_attack():
-                _check("B 重击：保留伸出段", _states_seen.has("EXTENDING"), " -> ".join(_states_seen))
-                _check("B 重击：抖得比轻击明显", _trauma_at_hit > 0.3, "trauma=%.2f" % _trauma_at_hit)
-                _start_attack(0, 3)
-                _phase = 3
-        3:
-            if _track_attack():
-                _check("A 轻击：仍有伸出段", _states_seen.has("EXTENDING"), " -> ".join(_states_seen))
-                _check("A：命中不抖镜头", _hit_seen_this_attack and _trauma_at_hit <= 0.0, "trauma=%.2f" % _trauma_at_hit)
-                print("     A 轻击：按下到开始挥 %.0f ms" % ((_sweep_frame - _press_frame) * 1000.0 / 60.0))
+                _check("重击：保留伸出段", _states_seen.has("EXTENDING"), " -> ".join(_states_seen))
+                _check("重击：抖得比轻击明显", _trauma_at_hit > 0.3, "trauma=%.2f" % _trauma_at_hit)
                 Input.action_release(&"move_forward")
                 return true
     return false

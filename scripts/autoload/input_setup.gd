@@ -31,8 +31,7 @@ func _enter_tree() -> void:
     _add_action(&"camera_down", [_joy_axis(JOY_AXIS_RIGHT_Y, 1.0)])
 
     _add_action(&"toggle_debug", [_key(KEY_F1), _joy_button(JOY_BUTTON_BACK)])
-    # A/B 预设切换（当前：打击感 A/B）和能力开关（当前：弹射），给开发者当场对比用
-    _add_action(&"cycle_preset", [_key(KEY_F2), _joy_button(JOY_BUTTON_DPAD_UP)])
+    # 能力开关（当前：弹射），给开发者当场对比用。以后有 A/B 在测时，F2 / 十字键上留给 A/B 切换
     _add_action(&"toggle_ability", [_key(KEY_F3), _joy_button(JOY_BUTTON_DPAD_DOWN)])
     # 闪避：手柄 B（类魂惯例），键鼠临时用右键
     _add_action(&"dodge", [_mouse(MOUSE_BUTTON_RIGHT), _joy_button(JOY_BUTTON_B)])
