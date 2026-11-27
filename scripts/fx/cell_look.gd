@@ -12,8 +12,10 @@ const MEMBRANE_SHADER: Shader = preload("res://shaders/cell_membrane.gdshader")
 @export_range(0.0, 1.0) var membrane_alpha: float = 0.4
 @export var rim_color: Color = Color(0.85, 1.0, 1.0)
 @export_range(0.0, 6.0) var rim_strength: float = 2.0
-@export_range(0.0, 1.0) var rim_edge: float = 0.6
-@export_range(0.001, 1.0) var rim_softness: float = 0.12
+## 边缘线宽（屏幕像素）。按像素定宽，掠射角下不会铺满整个表面
+@export_range(0.5, 12.0) var rim_pixels: float = 2.5
+## 边缘带的上限（菲涅尔值），防止远处的小物体整个被描满
+@export_range(0.01, 1.0) var rim_max_band: float = 0.3
 ## 膜流动的速度 / 起伏幅度（米）/ 疏密。细菌族更快更碎，模拟粗糙带毛的表面
 @export var flow_speed: float = 0.6
 @export var flow_amplitude: float = 0.03
@@ -34,8 +36,8 @@ func make_membrane_material() -> ShaderMaterial:
     m.set_shader_parameter(&"body_alpha", membrane_alpha)
     m.set_shader_parameter(&"rim_color", rim_color)
     m.set_shader_parameter(&"rim_strength", rim_strength)
-    m.set_shader_parameter(&"rim_edge", rim_edge)
-    m.set_shader_parameter(&"rim_softness", rim_softness)
+    m.set_shader_parameter(&"rim_pixels", rim_pixels)
+    m.set_shader_parameter(&"rim_max_band", rim_max_band)
     m.set_shader_parameter(&"flow_speed", flow_speed)
     m.set_shader_parameter(&"flow_amplitude", flow_amplitude)
     m.set_shader_parameter(&"flow_scale", flow_scale)
@@ -60,8 +62,11 @@ static func bacteria_default() -> CellLook:
     var l := CellLook.new()
     l.membrane_color = Color(0.55, 0.62, 0.22)
     l.membrane_alpha = 0.5
-    l.rim_color = Color(1.0, 0.9, 0.4)
-    l.rim_strength = 1.6
+    # 普通敌人的描边要低调：所有敌人都顶着醒目的黄边等于没有重点。
+    # 被准星选中 / 被锁定时由 Enemy 调亮、换色（三档）
+    l.rim_color = Color(0.85, 0.75, 0.35)
+    l.rim_strength = 0.9
+    l.rim_pixels = 1.8
     l.flow_speed = 1.4
     l.flow_amplitude = 0.04
     l.flow_scale = 7.0

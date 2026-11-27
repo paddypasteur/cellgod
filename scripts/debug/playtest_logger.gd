@@ -19,6 +19,8 @@ extends Node
 ##   result    一击挥完；info = "类型/1 或 0"（打中没有），算命中率用
 ##   combo     一套轻击连段结束；info = 这套打了几段
 ##   hit       打中一个目标；info = 力度（轻 0 / 重 1）
+##   lock      锁定状态变化；info = on / off / switch
+## sample 的 info = L 表示当时处于锁定状态；hurt 的 info = locked 表示挨打时处于锁定状态
 ##   input     玩家按下攻击或闪避；info = 动作名（算"命中后到下一次输入的间隔"用）
 ## preset 列 = 当时在测的 A/B（2026-11-27 打击感 A/B 结束后暂时为空）；bounce 列 = 弹射能力开（1）/关（0）
 ##   chain 的结束原因 no_target = 窗口里推了方向按了攻击，但锥形里没目标（想弹没弹出来）
@@ -74,6 +76,7 @@ func _ready() -> void:
     player.attack_launched.connect(func(kind: String) -> void: _write("attack", 0.0, NAN, -1, kind))
     player.attack_resolved.connect(func(kind: String, hit: bool) -> void:
         _write("result", 0.0, NAN, -1, "%s/%d" % [kind, 1 if hit else 0]))
+    player.lock_changed.connect(func(kind: String) -> void: _write("lock", 0.0, NAN, -1, kind))
     player.combo_ended.connect(func(length: int) -> void: _write("combo", 0.0, NAN, -1, str(length)))
     player.hit_landed.connect(func(_t: Node, charge: float) -> void: _write("hit", 0.0, NAN, -1, "%.2f" % charge))
     player.health_changed.connect(_on_health_changed)
@@ -87,7 +90,7 @@ func _physics_process(delta: float) -> void:
     _sample_timer -= delta
     if _sample_timer <= 0.0:
         _sample_timer = sample_interval
-        _write("sample", 0.0, NAN, -1)
+        _write("sample", 0.0, NAN, -1, "L" if player.get_lock_target() != null else "")
     # 轮询敌人状态找"刚开始起手"的那一帧，不改敌人代码
     var cam: Camera3D = get_viewport().get_camera_3d()
     for node: Node in get_tree().get_nodes_in_group(&"enemy"):
@@ -160,7 +163,7 @@ func _on_health_changed(current: float, _maximum: float) -> void:
         var rel_y: float = NAN
         if attacker != null:
             rel_y = _windup_rel_y.get(attacker, attacker.global_position.y - player.global_position.y)
-        _write("hurt", 0.0, rel_y, -1)
+        _write("hurt", 0.0, rel_y, -1, "locked" if player.get_lock_target() != null else "")
     _last_health = current
 
 

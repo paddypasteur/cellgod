@@ -186,6 +186,18 @@ def main() -> None:
         print(f"玩家高度：{min(ys):.1f} ~ {max(ys):.1f} 米；"
               f"每 0.5 秒里有上下移动（>0.5 米）的占 {100 * moving / len(moves):.0f}%")
 
+    # 2026-11-28 起：锁定（lock 事件；sample 的 info=L 表示当时锁着；hurt 的 info=locked 表示挨打时锁着）
+    locks = events("lock")
+    if locks:
+        samples = events("sample")
+        locked_samples = sum(r["info"] == "L" for r in samples)
+        kinds = Counter(r["info"] for r in locks)
+        hurt_locked = [r for r in hurt if r["info"] == "locked"]
+        print(f"锁定：锁上 {kinds.get('on', 0)} 次，切换 {kinds.get('switch', 0)} 次，"
+              f"锁着的时间占 {100 * locked_samples / max(len(samples), 1):.0f}%；"
+              f"受击 {len(hurt)} 次里锁着时 {len(hurt_locked)} 次，"
+              f"攻击者起手位置 {dict(Counter(layer(r['rel_y']) for r in hurt_locked))}")
+
 
 if __name__ == "__main__":
     main()

@@ -75,6 +75,13 @@ const STATE_LABELS: PackedStringArray = ["接近", "前摇", "攻击", "硬直",
 @export var windup_swell: float = 1.35
 ## 前摇结束时边缘高光增强到几倍：膨胀 + 变色 + 发亮，起手一眼可读
 @export var windup_rim_boost: float = 2.5
+## 描边分三档（2026-11-28 开发者："所有敌人都顶着醒目的黄边"等于没有重点）：
+## 普通 = look 里的低调细边；被准星选中 = 中等；被锁定 = 最醒目、换成锁定色（颜色取 Player.lock_color）
+@export var targeted_rim_color: Color = Color(1.0, 0.9, 0.45)
+@export var targeted_rim_strength: float = 1.8
+@export var targeted_rim_pixels: float = 2.5
+@export var locked_rim_strength: float = 3.5
+@export var locked_rim_pixels: float = 4.0
 @export var color_idle: Color = Color(0.55, 0.62, 0.22)
 @export var color_windup: Color = Color(1.0, 0.45, 0.1)
 @export var color_attack: Color = Color(1.0, 0.15, 0.1)
@@ -332,13 +339,24 @@ func _update_visuals() -> void:
     var facing: Vector3 = _attack_dir if _state == State.WINDUP or _state == State.ATTACK else _dir_to_player()
     var scale_factor: float = 1.0
     var color: Color = color_idle
+    # 描边档位：普通 / 被准星选中 / 被锁定
     var rim: float = look.rim_strength
+    var rim_color: Color = look.rim_color
+    var rim_pixels: float = look.rim_pixels
+    if _player.get_lock_target() == self:
+        rim = locked_rim_strength
+        rim_color = _player.lock_color
+        rim_pixels = locked_rim_pixels
+    elif _player.get_screen_target() == self:
+        rim = targeted_rim_strength
+        rim_color = targeted_rim_color
+        rim_pixels = targeted_rim_pixels
     match _state:
         State.WINDUP:
             var p: float = _windup_progress()
             scale_factor = lerpf(1.0, windup_swell, p)
             color = color_idle.lerp(color_windup, p)
-            rim = lerpf(look.rim_strength, look.rim_strength * windup_rim_boost, p)
+            rim = lerpf(rim, rim * windup_rim_boost, p)
         State.ATTACK:
             color = color_attack
         State.RECOVER, State.HITSTUN:
@@ -347,6 +365,8 @@ func _update_visuals() -> void:
         color = color_hurt
     _material.set_shader_parameter(&"base_color", color)
     _material.set_shader_parameter(&"rim_strength", rim)
+    _material.set_shader_parameter(&"rim_color", rim_color)
+    _material.set_shader_parameter(&"rim_pixels", rim_pixels)
     # 杆状身体的长轴指向攻击/玩家方向，冲刺方向一眼可读
     _visual.basis = _basis_facing(facing).scaled(Vector3.ONE * scale_factor)
     var arrow: String = ""

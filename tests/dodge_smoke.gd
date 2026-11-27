@@ -92,11 +92,11 @@ func _physics_process(_delta: float) -> bool:
             _press(&"pseudopod")
         331:
             _release(&"pseudopod")
-        341:
+        347:
             _check("轻击挥完进入收招", _p._pod_state in [Player.PodState.HOLDING, Player.PodState.RETRACTING],
                 Player.PodState.keys()[_p._pod_state])
             _press(&"dodge")
-        343:
+        349:
             _check("轻击收招可以闪避取消", _p.is_dodging() and _p._pod_state == Player.PodState.IDLE)
             return true
     return false

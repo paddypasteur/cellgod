@@ -24,6 +24,8 @@ var _sweep_frame: int = -1
 var _out_dir: String = ""
 var _hit_frame: int = -1
 var _shot_tag: String = ""
+var _l1_frame: int = -1
+var _l3_frame: int = -1
 
 
 func _initialize() -> void:
@@ -39,7 +41,12 @@ func _initialize() -> void:
     _enemy = scene.get_node("Enemies/EnemySide")
     for path: String in ["Enemies/EnemyAbove", "Enemies/EnemyBelow"]:
         scene.get_node(path).queue_free()
-    _p.attack_launched.connect(func(k: String) -> void: _kinds.append(k))
+    _p.attack_launched.connect(func(k: String) -> void:
+        _kinds.append(k)
+        if k == "L1" and _l1_frame < 0:
+            _l1_frame = _frame
+        elif k == "L3":
+            _l3_frame = _frame)
     _p.combo_ended.connect(func(n: int) -> void: _combos.append(n))
     _p.hit_landed.connect(func(_t: Node, _s: float) -> void: _hit_this = true)
 
@@ -124,7 +131,7 @@ func _physics_process(_delta: float) -> bool:
                 Input.action_release(&"pseudopod")
             _track()
             if _pf == 20:
-                _check("轻击按下即出手、没有伸出段", not _states.has("EXTENDING") and _sweep_frame > 0,
+                _check("轻击有短前摇、没有伸出段", not _states.has("EXTENDING") and _sweep_frame > 0 and _sweep_frame - _press_frame <= 8,
                     "按下到开始挥 %.0f ms；%s" % [(_sweep_frame - _press_frame) * 1000.0 / 60.0, " -> ".join(_states)])
                 _check("中等距离（敌人中心 4 米）打得到", _hit_this)
                 _check("后坐力：命中后玩家往后退", _vel_after_hit.z > 0.5,
@@ -138,21 +145,27 @@ func _physics_process(_delta: float) -> bool:
         _reset(2.5)
         _kinds.clear()
         _combos.clear()
+        _l1_frame = -1
         _phase = 2
     if _phase == 2:
-        if _pf in [1, 9, 17]:
-            _press(&"pseudopod")
-        elif _pf in [2, 10, 18]:
-            Input.action_release(&"pseudopod")
-        elif _pf == 50:
-            _check("连按三下 = L1 → L2 → L3", _kinds == ["L1", "L2", "L3"], str(_kinds))
+        # 2026-11-28 起每一下有前摇/判定/后摇，挥扫和后摇前段按的不排队。
+        # 模拟玩家狂按：每 2 帧按一次，直到打出三下
+        if _pf < 120:
+            if _pf % 4 == 1 and _kinds.size() < 3:
+                _press(&"pseudopod")
+            elif _pf % 4 == 3:
+                Input.action_release(&"pseudopod")
+        if _pf == 8:
+            _check("挥扫中狂按不会叠出第二下", _kinds == ["L1"], str(_kinds))
+        if _pf == 140:
+            _check("狂按 = L1 → L2 → L3（一下一下）", _kinds == ["L1", "L2", "L3"], str(_kinds))
             _check("连段结束报 3 段", _combos == [3], str(_combos))
-            _check("打满一套后有收招", _p._finisher_timer > 0.0 or _p._pod_state != Player.PodState.IDLE)
+            _check("三下之间有间隔（不少于 0.6 秒）", _l3_frame - _l1_frame >= 36, "%d 帧" % (_l3_frame - _l1_frame))
             _press(&"pseudopod")
-        elif _pf == 51:
+        elif _pf == 141:
             Input.action_release(&"pseudopod")
-        elif _pf == 80:
-            _check("收招后再按是新的一套（L1）", _kinds.size() == 4 and _kinds[3] == "L1", str(_kinds))
+        elif _pf == 170:
+            _check("打完再按是新的一套（L1）", _kinds.size() == 4 and _kinds[3] == "L1", str(_kinds))
             _reset(3.5)
             _shot_tag = "heavy"
             _kinds.clear()
@@ -178,11 +191,17 @@ func _physics_process(_delta: float) -> bool:
         elif _pf == 62:
             _pull_trigger([0.5, 0.0])
         elif _pf == 68:
+            # 挥扫中再拉：不排队
             _pull_trigger([0.3, 0.7, 1.0])
         elif _pf == 70:
             _pull_trigger([0.0])
-        elif _pf == 100:
-            _check("扳机拉一次 = 挥一下；再拉一次 = 接下一段", _kinds == ["L1", "L2"], str(_kinds))
+        elif _pf == 95:
+            _check("扳机拉一次 = 挥一下；挥扫中再拉不排队", _kinds == ["L1"], str(_kinds))
+            _pull_trigger([0.5, 1.0])
+        elif _pf == 97:
+            _pull_trigger([0.0])
+        elif _pf == 125:
+            _check("收完后再拉 = 接下一段", _kinds == ["L1", "L2"], str(_kinds))
             return true
     return false
 

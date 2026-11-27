@@ -27,8 +27,10 @@ signal attack_launched(kind: String)
 signal attack_resolved(kind: String, hit: bool)
 ## 一套轻击连段结束（回到待机或被别的动作打断），length = 这套打了几段
 signal combo_ended(length: int)
+## 锁定状态变化。kind = "on" / "off" / "switch"
+signal lock_changed(kind: String)
 
-## WINDUP 只有重击有（聚合段）；轻击按下直接进 SWEEPING
+## WINDUP = 前摇：轻击是刃在膜上成型（很短），重击是聚合段（看得见的蓄）
 enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 
 @export_group("移动")
@@ -99,12 +101,20 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export var light_combo_segments: int = 3
 ## 每段挥扫的总角度（度）
 @export_range(0.0, 300.0) var light_arc_deg: float = 100.0
-## 每段扫完整个弧的时间（秒）
+## 2026-11-28 开发者："攻击没有任何间隔，我一直连它还是跟之前没区别。要有前摇后摇，一下一下的，是一次完整的攻击。"
+## 所以每一下分成 前摇 → 判定（挥扫）→ 后摇 三段，段与段之间有边界；后摇里按攻击不排队，只有末尾一小段收缓冲
+## 前摇（秒）：刃在膜上成型，看得见"要出手了"
+@export var light_windup_time: float = 0.07
+## 连段第二、三下的前摇按这个比例缩短（连段加速），但每一下仍然是离散的
+@export_range(0.0, 1.0) var light_combo_windup_scale: float = 0.6
+## 判定段：扫完整个弧的时间（秒）
 @export var light_swing_time: float = 0.1
-## 每段挥完后停留多久（秒）。停留 + 收回就是"接下一段"的取消窗口：这期间再按就直接接下一段
-@export var light_hold_time: float = 0.06
-## 收回速度（米/秒）
-@export var light_retract_speed: float = 30.0
+## 后摇（秒）：刃解聚、流回身体。期间不接受攻击输入
+@export var light_recovery_time: float = 0.22
+## 后摇的最后这么久（秒）才开始接受下一下的输入并缓冲；再早按的直接丢弃，不排队
+@export var light_buffer_window: float = 0.08
+## 后摇结束后这么久（秒）内再按，算同一套连段的下一下；过了就从第一下重新开始
+@export var light_combo_link_time: float = 0.3
 ## 最后一段打完后额外的收招时间（秒），期间不能起新连段——一套打完要付一点代价
 @export var light_finisher_recover: float = 0.2
 ## 刃在挥的过程中沿弧线成型：开始时有多长（相对刃长），挥到一半长满
@@ -243,6 +253,38 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 细胞观感（半透明膜 + 实核 + 膜流动 + 边缘高光）。免疫族配色；为空时用默认值
 @export var look: CellLook
 
+@export_group("伪足与本体形变")
+## 2026-11-28 开发者："伸出来一根比细胞大 N 倍的柱子太奇怪了，要自然而然从膜上凸出来，浑然一体。"
+## 违和感主要来自本体纹丝不动——所以出手时整个细胞朝出手方向抻长、背面凹进去，收回时弹回来
+## 伪足根部半径（相对身体半径）：根部宽，和身体连成一片看不出接缝
+@export_range(0.1, 1.0) var pod_root_ratio: float = 0.75
+## 伪足刃口（尖端）半径（米）：往外逐渐收细，不是等粗的圆柱
+@export var pod_tip_radius_visual: float = 0.03
+## 本体朝出手方向抻长的程度：轻击 / 重击（0 = 不变形）
+@export_range(0.0, 1.0) var body_stretch_light: float = 0.3
+@export_range(0.0, 1.0) var body_stretch_heavy: float = 0.5
+## 形变的弹簧：刚度越大跟得越紧；阻尼越小，收回时弹得越明显
+@export var body_stretch_stiffness: float = 140.0
+@export var body_stretch_damping: float = 9.0
+
+@export_group("锁定")
+## 2026-11-28 开发者："现在不知道我在锁定谁。锁定之后攻击就应该朝着他；按摇杆切换。"
+## R3 / Q / 鼠标中键 锁定或解锁；锁定时快速拨一下右摇杆切换目标。
+## 锁定决定攻击朝向和身体转向，**不焊死镜头**（镜头只轻微偏向目标，推住右摇杆随时能看别处）
+## 多远以内能锁上（米）
+@export var lock_range: float = 18.0
+## 超过多远自动解锁（米）
+@export var lock_break_range: float = 25.0
+## 锁定时在离准星多远的范围里找目标（屏幕高度的比例），比普通索敌宽
+@export_range(0.0, 1.0) var lock_acquire_screen_radius: float = 0.45
+## 右摇杆推过这个幅度、并在 lock_flick_time 秒内松回去，算"拨一下"切换目标；推住更久就是转镜头张望
+@export_range(0.1, 1.0) var lock_flick_threshold: float = 0.7
+@export var lock_flick_time: float = 0.25
+## 切换时只在拨动方向两侧这么多度以内找下一个目标
+@export_range(10.0, 180.0) var lock_switch_max_angle_deg: float = 70.0
+## 锁定标记的颜色（敌人描边也换成这个颜色）
+@export var lock_color: Color = Color(1.0, 0.3, 0.55)
+
 ## 竞技场边界由 Arena 在运行时写入，不在这里调
 var arena_center: Vector3 = Vector3.ZERO
 var arena_radius: float = 20.0
@@ -256,6 +298,25 @@ var _body_material: ShaderMaterial = null
 var _body_base_color: Color = Color.WHITE
 ## 伪足的材质：挥击时硬化成刃（hardness=1），收回时软回去
 var _pod_material: ShaderMaterial = null
+## 本体抻长的弹簧状态
+var _stretch: float = 0.0
+var _stretch_vel: float = 0.0
+var _stretch_dir: Vector3 = Vector3.FORWARD
+
+## 锁定目标（null = 没锁）
+var _lock_target: Node3D = null
+var _lock_marker: MeshInstance3D = null
+var _flick_active: bool = false
+var _flick_timer: float = 0.0
+var _flick_dir: Vector2 = Vector2.ZERO
+
+## 当前这次前摇是重击的（否则是轻击）
+var _windup_is_heavy: bool = false
+var _windup_duration: float = 0.0
+## 轻击后摇还剩多久（只在后摇末尾 light_buffer_window 内接受下一下的输入）
+var _recovery_left: float = 0.0
+## 后摇结束后，还能接同一套连段的剩余时间
+var _combo_link_timer: float = 0.0
 
 var _dodge_timer: float = 0.0
 var _dodge_cooldown_timer: float = 0.0
@@ -357,13 +418,18 @@ func _ready() -> void:
     health = max_health
     _ensure_tiers()
     _apply_look()
+    _create_lock_marker()
 
 
 func _unhandled_input(event: InputEvent) -> void:
     # 按下事件走 _unhandled_input 而不是在物理帧里轮询 just_pressed：
     # 命中定格时物理帧暂停，轮询会漏掉定格期间的按键
     if _is_fresh_press(event, &"pseudopod"):
-        _buffer_timer = input_buffer_time
+        # 不是任何时候按都排队：挥扫和后摇前段按的直接丢弃，攻击之间才有边界
+        if _light_press_accepted():
+            _buffer_timer = maxf(_recovery_left, 0.0) + light_buffer_window
+    elif _is_fresh_press(event, &"lock_on"):
+        _toggle_lock()
     elif _is_fresh_press(event, &"heavy_attack"):
         _heavy_buffer = input_buffer_time
     elif _is_fresh_press(event, &"dodge"):
@@ -409,6 +475,8 @@ func _physics_process(delta: float) -> void:
     _bounce_timer = maxf(_bounce_timer - delta, 0.0)
     _recoil_timer = maxf(_recoil_timer - delta, 0.0)
     _finisher_timer = maxf(_finisher_timer - delta, 0.0)
+    _update_combo_link(delta)
+    _update_lock(delta)
     if _bounce_window > 0.0:
         _bounce_window -= delta
         if _bounce_window <= 0.0 and not _bouncing:
@@ -419,6 +487,7 @@ func _physics_process(delta: float) -> void:
     _try_start_dodge()
     _update_pseudopod(delta)
     _update_movement(delta)
+    _update_body_deform(delta)
     _update_visuals()
 
 
@@ -436,6 +505,14 @@ func _update_facing(delta: float) -> void:
     if turn_deg <= 0.0:
         return
     var step: float = deg_to_rad(turn_deg) * delta
+    # 锁定时身体始终转向目标（类魂锁定：边走位边面朝对手），不跟移动方向
+    if _lock_target != null:
+        var to: Vector3 = _lock_target.global_position - global_position
+        var flat: float = Vector2(to.x, to.z).length()
+        if flat > 0.0001:
+            _facing_yaw = rotate_toward(_facing_yaw, atan2(-to.x, -to.z), step)
+        _facing_pitch = move_toward(_facing_pitch, _clamp_facing_pitch(atan2(to.y, flat)), step)
+        return
     var wish: Vector3 = _move_input_world(1.0)
     var planar_len: float = Vector2(wish.x, wish.z).length()
     if planar_len > 0.0001:
@@ -470,6 +547,11 @@ func _facing_basis() -> Basis:
 
 ## 优先级：方向攻击（按着升降键）> 屏幕中心索敌 > 身体正面（俯仰叠加镜头偏移）
 func _update_aim() -> void:
+    # 有锁定目标 → 一切听锁定的：攻击朝它，准星索敌和方向攻击都不参与（策划 2026-11-28 定）
+    if _lock_target != null:
+        _target = _lock_target
+        _aim_dir = (_lock_target.global_position - global_position).normalized()
+        return
     var vertical: float = Input.get_axis(&"move_down", &"move_up")
     var directional: bool = directional_attacks and absf(vertical) > 0.5
 
@@ -606,21 +688,30 @@ func _update_pseudopod(delta: float) -> void:
             if _heavy_buffer > 0.0:
                 _heavy_buffer = 0.0
                 _buffer_timer = 0.0
+                _end_combo()
                 _begin_attack_facing()
-                _windup_time = 0.0
-                _pod_state = PodState.WINDUP
+                _begin_windup(true)
             elif _buffer_timer > 0.0:
                 _buffer_timer = 0.0
                 _begin_attack_facing()
-                _start_light(1)
+                # 后摇结束后不久再按 = 同一套连段的下一下；否则从第一下开始
+                if _combo_index > 0 and _combo_index < light_combo_segments and _combo_link_timer > 0.0:
+                    _combo_index += 1
+                else:
+                    _end_combo()
+                    _combo_index = 1
+                _begin_windup(false)
 
         PodState.WINDUP:
-            # 重击的聚合段：看得见的蓄。到时间自动出手，不需要松手
+            # 前摇：轻击是刃在膜上成型（很短），重击是看得见的聚合。到时间自动出手，不需要松手
             _windup_time += delta
             if _target != null:
                 _face_toward(_aim_dir)
-            if _windup_time >= heavy_windup_time:
-                _launch_attack(true, _aim_dir, "H")
+            if _windup_time >= _windup_duration:
+                if _windup_is_heavy:
+                    _launch_attack(true, _aim_dir, "H")
+                else:
+                    _launch_attack(false, _aim_dir, "L%d" % _combo_index)
 
         PodState.EXTENDING:
             # 只有重击有伸出段：相当于抬手，不判定；伸到位后才开始扫
@@ -644,28 +735,64 @@ func _update_pseudopod(delta: float) -> void:
                 _enter_hold()
 
         PodState.HOLDING, PodState.RETRACTING:
-            # 轻击挥完后的停留/收回 = 取消窗口：这期间再按（或挥扫途中按下留在缓冲里）就直接接下一段
-            var can_chain: bool = not _attack_is_heavy and not _auto_attack and not _bouncing
-            if can_chain and _buffer_timer > 0.0 and _combo_index < light_combo_segments:
-                _buffer_timer = 0.0
-                _begin_attack_facing()
-                _start_light(_combo_index + 1)
-                return
+            # 后摇：这一下的收尾。轻击的后摇不接受取消，按键只在末尾一小段才被缓冲，攻击之间因此有边界
+            var light_recovery: bool = not _attack_is_heavy
+            if light_recovery:
+                _recovery_left = maxf(_recovery_left - delta, 0.0)
             if _pod_state == PodState.HOLDING:
                 _hold_timer -= delta
                 if _hold_timer <= 0.0:
                     _pod_state = PodState.RETRACTING
             else:
-                var speed: float = heavy_retract_speed if _attack_is_heavy else light_retract_speed
+                var speed: float = heavy_retract_speed
+                if light_recovery:
+                    # 轻击的收回时长由后摇时长决定：刃流回身体，正好在后摇结束时收完
+                    speed = _target_length / maxf(light_recovery_time * 0.7, 0.01)
                 _pod_length = move_toward(_pod_length, 0.0, speed * delta)
                 if _pod_length <= 0.0:
                     _pod_state = PodState.IDLE
-                    _end_combo()
+                    _recovery_left = 0.0
+                    if _combo_index >= light_combo_segments:
+                        _end_combo()
+                    elif _combo_index > 0:
+                        _combo_link_timer = light_combo_link_time
+
+
+## 什么时候按轻击才算数：待机、轻击后摇的最后 light_buffer_window 秒、或者弹射窗口开着的时候。
+## 前摇、挥扫、后摇前段按的直接丢弃（不排队）——这正是"一下一下"的边界
+func _light_press_accepted() -> bool:
+    if _bounce_window > 0.0:
+        return true
+    match _pod_state:
+        PodState.IDLE:
+            return true
+        PodState.HOLDING, PodState.RETRACTING:
+            return not _attack_is_heavy and _recovery_left <= light_buffer_window
+    return false
+
+
+func _begin_windup(heavy: bool) -> void:
+    _windup_is_heavy = heavy
+    _windup_time = 0.0
+    if heavy:
+        _windup_duration = heavy_windup_time
+    else:
+        _windup_duration = light_windup_time * (1.0 if _combo_index <= 1 else light_combo_windup_scale)
+    _pod_state = PodState.WINDUP
+
+
+## 后摇结束后的"连段衔接"计时：过了还没按，这套连段就结束了
+func _update_combo_link(delta: float) -> void:
+    if _combo_link_timer <= 0.0:
+        return
+    _combo_link_timer -= delta
+    if _combo_link_timer <= 0.0 and _pod_state == PodState.IDLE:
+        _end_combo()
 
 
 ## 出手前的转身：推着方向就转过去（类魂的"按方向+攻击"），有索敌目标就朝目标
 func _begin_attack_facing() -> void:
-    if snap_facing_on_attack:
+    if snap_facing_on_attack and _lock_target == null:
         _snap_facing_to_input()
         # 立刻刷新，否则这一帧的鼓包和瞄准点还指着旧方向
         _update_aim()
@@ -673,13 +800,9 @@ func _begin_attack_facing() -> void:
         _face_toward(_aim_dir)
 
 
-func _start_light(index: int) -> void:
-    _combo_index = index
-    _launch_attack(false, _aim_dir, "L%d" % index)
-
-
-## 一套连段结束：回到待机、被闪避/弹射打断。打满一整套要付一点收招时间
+## 一套连段结束：衔接超时、打满、被闪避/弹射/重击打断。打满一整套要付一点收招时间
 func _end_combo() -> void:
+    _combo_link_timer = 0.0
     if _combo_index <= 0:
         return
     combo_ended.emit(_combo_index)
@@ -688,13 +811,162 @@ func _end_combo() -> void:
     _combo_index = 0
 
 
+# ---------------------------------------------------------------- 本体形变
+
+## 出手时整个细胞朝出手方向抻长、背面凹进去，收回时弹回来（弹簧，阻尼不大，所以会回弹一下）。
+## 本体跟着变，它就是一个生物；本体不动，它就是装了零件的球
+func _update_body_deform(delta: float) -> void:
+    var goal: float = 0.0
+    var strength: float = body_stretch_heavy if _attack_is_heavy else body_stretch_light
+    match _pod_state:
+        PodState.WINDUP:
+            strength = body_stretch_heavy if _windup_is_heavy else body_stretch_light
+            goal = strength * _windup_progress() * 0.6
+            _stretch_dir = _aim_dir
+        PodState.EXTENDING, PodState.SWEEPING, PodState.HOLDING:
+            goal = strength
+            _stretch_dir = _pod_dir()
+        PodState.RETRACTING:
+            # 收回 = 物质流回身体，抻长随伪足长度一起退
+            goal = strength * clampf(_pod_length / maxf(_target_length, 0.001), 0.0, 1.0)
+            _stretch_dir = _pod_dir()
+    var accel: float = (goal - _stretch) * body_stretch_stiffness - _stretch_vel * body_stretch_damping
+    _stretch_vel += accel * delta
+    _stretch += _stretch_vel * delta
+    if _body_material != null:
+        # Player 自身不旋转，身体网格的模型空间就是世界朝向
+        _body_material.set_shader_parameter(&"stretch_dir", _stretch_dir.normalized())
+        _body_material.set_shader_parameter(&"stretch_amount", maxf(_stretch, -0.1))
+
+
+# ---------------------------------------------------------------- 锁定
+
+func _create_lock_marker() -> void:
+    var ring := TorusMesh.new()
+    ring.inner_radius = 1.05
+    ring.outer_radius = 1.2
+    ring.rings = 32
+    ring.ring_segments = 4
+    var m := StandardMaterial3D.new()
+    m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    m.albedo_color = lock_color
+    # 不被目标自己挡住：锁定环永远画在最上面
+    m.no_depth_test = true
+    ring.material = m
+    _lock_marker = MeshInstance3D.new()
+    _lock_marker.name = "LockMarker"
+    _lock_marker.mesh = ring
+    _lock_marker.top_level = true
+    _lock_marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+    _lock_marker.visible = false
+    add_child(_lock_marker)
+
+
+func get_lock_target() -> Node3D:
+    return _lock_target
+
+
+## 准星索敌当前选中的（锁定时就是锁定目标）
+func get_screen_target() -> Node3D:
+    return _target
+
+
+func _toggle_lock() -> void:
+    if _lock_target != null:
+        _set_lock(null, "off")
+        return
+    # 先锁准星正在选中的；没有就在更宽的屏幕范围、更远的距离里找离准星最近的
+    var pick: Node3D = _target if is_instance_valid(_target) and _target.is_in_group(&"target") else null
+    if pick == null:
+        var cam: Camera3D = get_viewport().get_camera_3d()
+        if cam != null:
+            var max_px: float = get_viewport().get_visible_rect().size.y * lock_acquire_screen_radius
+            var best: float = INF
+            for node: Node in get_tree().get_nodes_in_group(&"target"):
+                var t := node as Node3D
+                if t == null:
+                    continue
+                var score: float = _target_score(cam, t, lock_range, max_px)
+                if score >= 0.0 and score < best:
+                    best = score
+                    pick = t
+    if pick != null:
+        _set_lock(pick, "on")
+
+
+func _set_lock(target: Node3D, kind: String) -> void:
+    _lock_target = target
+    lock_changed.emit(kind)
+
+
+## 每帧：目标死了、跑太远就自动解锁；锁定时检测右摇杆"拨一下"切换目标
+func _update_lock(delta: float) -> void:
+    if _lock_target != null:
+        if not is_instance_valid(_lock_target) or not _lock_target.is_in_group(&"target")                 or _lock_target.global_position.distance_to(global_position) > lock_break_range:
+            _set_lock(null, "off")
+    var stick: Vector2 = Input.get_vector(&"camera_left", &"camera_right", &"camera_down", &"camera_up")
+    if _lock_target == null:
+        _flick_active = false
+        return
+    var mag: float = stick.length()
+    if not _flick_active:
+        if mag >= lock_flick_threshold:
+            _flick_active = true
+            _flick_timer = 0.0
+            _flick_dir = stick
+        return
+    _flick_timer += delta
+    if mag > _flick_dir.length():
+        _flick_dir = stick
+    if mag < 0.3:
+        _flick_active = false
+        # 推得快、松得快才是"拨"；推住超过 lock_flick_time 是在转镜头张望，不切换
+        if _flick_timer <= lock_flick_time:
+            _switch_lock(_flick_dir)
+
+
+## 按拨动方向在屏幕上找下一个目标：相对当前目标的屏幕位置，方向夹角在范围内、离得最近的
+func _switch_lock(flick: Vector2) -> void:
+    var cam: Camera3D = get_viewport().get_camera_3d()
+    if cam == null or _lock_target == null:
+        return
+    var from: Vector2 = get_aim_screen_point()
+    if not cam.is_position_behind(_lock_target.global_position):
+        from = cam.unproject_position(_lock_target.global_position)
+    # 摇杆往上推是屏幕往上（屏幕 y 向下为正）
+    var want: Vector2 = Vector2(flick.x, -flick.y).normalized()
+    var max_angle: float = deg_to_rad(lock_switch_max_angle_deg)
+    var best: Node3D = null
+    var best_score: float = INF
+    for node: Node in get_tree().get_nodes_in_group(&"target"):
+        var t := node as Node3D
+        if t == null or t == _lock_target:
+            continue
+        if t.global_position.distance_to(global_position) > lock_range:
+            continue
+        if cam.is_position_behind(t.global_position):
+            continue
+        var v: Vector2 = cam.unproject_position(t.global_position) - from
+        if v.length() < 1.0:
+            continue
+        var angle: float = absf(want.angle_to(v))
+        if angle > max_angle:
+            continue
+        var score: float = v.length() * (1.0 + angle)
+        if score < best_score:
+            best_score = score
+            best = t
+    if best != null:
+        _set_lock(best, "switch")
+
+
 ## 当前状态下伪足"能伸到"的长度，用于索敌范围和预告
 func _current_reach_length() -> float:
     match _pod_state:
         PodState.IDLE:
             return light_reach
         PodState.WINDUP:
-            return heavy_reach
+            return heavy_reach if _windup_is_heavy else light_reach
         _:
             return _target_length
 
@@ -702,7 +974,7 @@ func _current_reach_length() -> float:
 func _windup_progress() -> float:
     if _pod_state != PodState.WINDUP:
         return 0.0
-    return clampf(_windup_time / maxf(heavy_windup_time, 0.001), 0.0, 1.0)
+    return clampf(_windup_time / maxf(_windup_duration, 0.001), 0.0, 1.0)
 
 
 ## 发出一击。kind："L1"… 轻击第几段 / "H" 重击 / "auto" 弹射到达后的自动轻击（属于当前弹射链）
@@ -751,7 +1023,9 @@ func _enter_hold() -> void:
         # 碰到第一个就停的设置下挥扫可能提前结束，刃要按完整长度收回
         _light_forming = false
         _pod_length = maxf(_pod_length, _target_length * light_form_start)
-    _hold_timer = heavy_hold_time if _attack_is_heavy else light_hold_time
+    # 轻击：后摇的前 30% 停住（刃还硬着，看得见这一下打完了），后 70% 流回身体
+    _hold_timer = heavy_hold_time if _attack_is_heavy else light_recovery_time * 0.3
+    _recovery_left = 0.0 if _attack_is_heavy else light_recovery_time
     _pod_state = PodState.HOLDING
     attack_resolved.emit(_attack_kind, _attack_hit_any)
     # 挥扫结束：弹射到达后的那一击到这里就知道有没有打中
@@ -820,6 +1094,15 @@ func _apply_look() -> void:
     _body_base_color = look.membrane_color
     _pod_material = look.make_membrane_material()
     _pod_mesh.material_override = _pod_material
+    # 伪足：根部宽（和身体连成一片）、往外收细到刃口，不是等粗的圆柱。
+    # 网格沿 Y 轴、底面在身体中心，所以底面半径就是"根部"
+    var taper := CylinderMesh.new()
+    taper.bottom_radius = body_radius * pod_root_ratio
+    taper.top_radius = pod_tip_radius_visual
+    taper.height = 1.0
+    taper.radial_segments = 16
+    taper.rings = 6
+    _pod_mesh.mesh = taper
     _bulge_mesh.material_override = look.make_membrane_material()
     var core_mesh := SphereMesh.new()
     core_mesh.radius = body_radius * look.core_scale
@@ -1106,6 +1389,7 @@ func _try_start_dodge() -> void:
             if not dodge_cancels_windup:
                 return
             _pod_state = PodState.IDLE
+            _end_combo()
         PodState.HOLDING, PodState.RETRACTING:
             # 轻击挥完后的收招可以闪掉；重击不行（门户大开）
             if _attack_is_heavy or _auto_attack or not dodge_cancels_light_recovery:
@@ -1234,27 +1518,37 @@ func _update_visuals() -> void:
     if _aim_marker.visible:
         _aim_marker.position = _aim_dir * (body_radius + 0.35)
 
-    # 标记是 top_level，直接用世界坐标挂在目标头顶
-    _target_marker.visible = idle_or_windup and _target != null
+    # 标记是 top_level，直接用世界坐标挂在目标头顶。锁定时换成锁定环，不叠两个标记
+    _target_marker.visible = idle_or_windup and _target != null and _lock_target == null
     if _target_marker.visible:
         _target_marker.global_position = _target.global_position + Vector3.UP * target_marker_height
 
+    # 锁定环：套在目标身上、始终正对镜头，出招过程中也一直显示——"一眼看出锁的是谁"
+    _lock_marker.visible = _lock_target != null
+    if _lock_marker.visible:
+        var cam: Camera3D = get_viewport().get_camera_3d()
+        var to_cam: Vector3 = Vector3.BACK
+        if cam != null:
+            to_cam = (cam.global_position - _lock_target.global_position).normalized()
+        _lock_marker.global_transform = Transform3D(_basis_y_to(to_cam), _lock_target.global_position)
+
     var winding_up: bool = _pod_state == PodState.WINDUP
 
-    # 重击聚合的可读性靠剪影：膜朝伪足将要伸出的方向鼓起、越聚越长（物质往伪足里流、聚合成刃）。
-    # 鼓在挥扫起点那一侧，顺便预告这一下从哪边扫过来。轻击没有这一段
+    # 前摇的可读性靠剪影：膜朝伪足将要伸出的方向鼓起、越聚越长（物质往伪足里流、聚合成刃）。
+    # 鼓在挥扫起点那一侧，顺便预告这一下从哪边扫过来。轻击的前摇很短，鼓包也小
     _bulge_mesh.visible = winding_up
     if _bulge_mesh.visible:
         var c: float = _windup_progress()
-        var bulge_dir: Vector3 = _aim_dir.rotated(_swing_axis_for(_aim_dir), _swing_half_arc(true) * _swing_side)
-        var width: float = lerpf(0.35, 0.6, c)
-        var length: float = lerpf(0.4, bulge_max_stretch, c)
+        var size: float = 1.0 if _windup_is_heavy else 0.6
+        var bulge_dir: Vector3 = _aim_dir.rotated(_swing_axis_for(_aim_dir), _swing_half_arc(_windup_is_heavy) * _swing_side)
+        var width: float = lerpf(0.35, 0.6, c) * size
+        var length: float = lerpf(0.4, bulge_max_stretch, c) * size
         _bulge_mesh.transform = Transform3D(
             _basis_y_to(bulge_dir) * Basis.from_scale(Vector3(width, length, width)),
             bulge_dir * (body_radius * 0.6 + length * 0.25)
         )
 
-    _swing_preview.visible = show_reach_preview and winding_up
+    _swing_preview.visible = show_reach_preview and winding_up and _windup_is_heavy
     if _swing_preview.visible:
         _draw_swing_preview(heavy_reach * _windup_progress(), _swing_half_arc(true))
 

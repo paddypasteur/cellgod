@@ -38,6 +38,8 @@ func _enter_tree() -> void:
 
     # 轻击（连按出连段）。2026-11-27 起不再蓄力，按下即出手
     _add_action(&"pseudopod", [_mouse(MOUSE_BUTTON_LEFT), _joy_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)])
+    # 锁定 / 解锁：R3（类魂通用约定）。键鼠临时用 Q 或鼠标中键
+    _add_action(&"lock_on", [_joy_button(JOY_BUTTON_RIGHT_STICK), _key(KEY_Q), _mouse(MOUSE_BUTTON_MIDDLE)])
     # 重击：独立按键（不是蓄力）。RB 在上下移动挪到左手后空出来了
     _add_action(&"heavy_attack", [_key(KEY_E), _joy_button(JOY_BUTTON_RIGHT_SHOULDER)])
 

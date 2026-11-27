@@ -20,6 +20,7 @@ extends Control
 @export var show_target_radius: bool = false
 
 var _targeted: bool = false
+var _locked: bool = false
 
 
 func _ready() -> void:
@@ -31,6 +32,7 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
     _targeted = player != null and player.has_target()
+    _locked = player != null and player.get_lock_target() != null
     # 每帧重画：准星位置跟着 Player 的索敌点参数走，运行时拖参数要立刻看到
     queue_redraw()
 
@@ -38,6 +40,9 @@ func _process(_delta: float) -> void:
 func _draw() -> void:
     var center: Vector2 = player.get_aim_screen_point() if player != null else size * 0.5
     var color: Color = color_targeted if _targeted else color_idle
+    # 锁定时准星也换成锁定色，和目标身上的锁定环、描边一致
+    if _locked:
+        color = player.lock_color
     for dir: Vector2 in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
         draw_line(center + dir * gap_px, center + dir * (gap_px + arm_length_px), color, thickness_px, true)
     if show_target_radius and player != null:

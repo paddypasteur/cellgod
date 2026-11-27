@@ -53,6 +53,15 @@ extends Camera3D
 ## 弹射途中镜头朝飞行方向转的速度：提前把目标带进画面。0 = 不引导
 @export var bounce_yaw_lead_rate: float = 5.0
 
+@export_group("锁定时")
+## 锁定时镜头偏向目标的强度（0 = 完全不管，1 = 很快对准）。默认偏弱：这是球形战场，
+## 镜头焊死在一只敌人身上就看不见其他方向的威胁（DESIGN《镜头与锁定》）
+@export_range(0.0, 1.0) var lock_bias: float = 0.3
+## 偏向的速度
+@export var lock_bias_rate: float = 2.0
+## 俯仰也跟着偏一点：目标在上/下方时，镜头抬/低头多少（相对目标仰角的比例）
+@export_range(0.0, 1.0) var lock_pitch_follow: float = 0.4
+
 @export_group("震动")
 ## 震动强度为 1 时镜头最多偏移多少米
 @export var shake_max_offset: float = 0.35
@@ -65,6 +74,8 @@ var _yaw: float = 0.0
 var _pitch_deg: float = 0.0
 var _pivot: Vector3 = Vector3.ZERO
 var _manual_cooldown: float = 0.0
+## 右摇杆被推住多久了：锁定时要推住超过"拨一下"的时长才算转镜头，免得拨摇杆切换目标时镜头也跟着晃
+var _stick_hold_time: float = 0.0
 
 
 func _ready() -> void:
@@ -84,6 +95,7 @@ func _physics_process(delta: float) -> void:
     _pivot = _pivot.lerp(target.global_position, 1.0 - exp(-position_follow_rate * delta))
     _update_manual(delta)
     _update_yaw(delta)
+    _update_lock_bias(delta)
     _update_bounce_camera(delta)
     _trauma = maxf(_trauma - shake_decay * delta, 0.0)
     _apply()
@@ -108,6 +120,27 @@ func _update_bounce_camera(delta: float) -> void:
     _yaw = lerp_angle(_yaw, desired, 1.0 - exp(-bounce_yaw_lead_rate * delta))
 
 
+func _lock_target() -> Node3D:
+    if target != null and target.has_method(&"get_lock_target"):
+        return target.call(&"get_lock_target")
+    return null
+
+
+## 锁定时镜头轻微偏向目标：玩家推右摇杆张望时让开，松手过一会儿再慢慢转回来
+func _update_lock_bias(delta: float) -> void:
+    var lock := _lock_target()
+    if lock == null or lock_bias <= 0.0 or _manual_cooldown > 0.0:
+        return
+    var to: Vector3 = lock.global_position - target.global_position
+    var flat: float = Vector2(to.x, to.z).length()
+    if flat < 0.01:
+        return
+    var w: float = (1.0 - exp(-lock_bias_rate * delta)) * lock_bias
+    _yaw = lerp_angle(_yaw, atan2(-to.x, -to.z), w)
+    var want_pitch: float = pitch_deg + rad_to_deg(atan2(to.y, flat)) * lock_pitch_follow
+    _pitch_deg = clampf(lerpf(_pitch_deg, want_pitch, w), pitch_min_deg, pitch_max_deg)
+
+
 ## 叠加一次震动，强度 0..1，多次受击会叠加但不超过 1
 func add_shake(amount: float) -> void:
     _trauma = clampf(_trauma + amount, 0.0, 1.0)
@@ -117,7 +150,13 @@ func _update_manual(delta: float) -> void:
     _manual_cooldown = maxf(_manual_cooldown - delta, 0.0)
     var stick: Vector2 = Input.get_vector(&"camera_left", &"camera_right", &"camera_down", &"camera_up", stick_deadzone)
     if stick == Vector2.ZERO:
+        _stick_hold_time = 0.0
         return
+    _stick_hold_time += delta
+    if _lock_target() != null:
+        var flick_time: Variant = target.get("lock_flick_time")
+        if flick_time != null and _stick_hold_time <= float(flick_time):
+            return
     _manual_cooldown = auto_follow_resume_delay
     # 摇杆往右推 = 镜头往右看 = yaw 减小（yaw 正方向是从上往下看逆时针）
     _yaw -= deg_to_rad(stick_yaw_speed_deg) * stick.x * delta
@@ -127,7 +166,8 @@ func _update_manual(delta: float) -> void:
 
 
 func _update_yaw(delta: float) -> void:
-    if yaw_follow_rate <= 0.0 or _manual_cooldown > 0.0:
+    # 锁定时由锁定偏向接管，不再跟移动方向回正，两者会互相拉扯
+    if yaw_follow_rate <= 0.0 or _manual_cooldown > 0.0 or _lock_target() != null:
         return
     var v: Vector3 = target.velocity
     v.y = 0.0
