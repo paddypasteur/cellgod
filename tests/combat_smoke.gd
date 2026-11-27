@@ -167,5 +167,30 @@ func _physics_process(_delta: float) -> bool:
                 " -> ".join(_states))
             _check("重击命中镜头抖比轻击明显", _trauma_after_hit > 0.2, "%.2f" % _trauma_after_hit)
             _check("重击后坐力比轻击大", _vel_after_hit.z > 3.0, "z=%+.2f" % _vel_after_hit.z)
+            _reset(2.5)
+            _kinds.clear()
+            _phase = 4
+    elif _phase == 4:
+        # 模拟真手柄扳机：拉下去的过程中连续上报好几个位置，然后松开。拉一次只能挥一下
+        # 先等上一阶段的重击收完（整套约 1.35 秒，收招期间轻击不能起手）
+        if _pf == 60:
+            _pull_trigger([0.15, 0.35, 0.6, 0.85, 1.0])
+        elif _pf == 62:
+            _pull_trigger([0.5, 0.0])
+        elif _pf == 68:
+            _pull_trigger([0.3, 0.7, 1.0])
+        elif _pf == 70:
+            _pull_trigger([0.0])
+        elif _pf == 100:
+            _check("扳机拉一次 = 挥一下；再拉一次 = 接下一段", _kinds == ["L1", "L2"], str(_kinds))
             return true
     return false
+
+
+func _pull_trigger(values: Array) -> void:
+    for v: float in values:
+        var ev := InputEventJoypadMotion.new()
+        ev.axis = JOY_AXIS_TRIGGER_RIGHT
+        ev.axis_value = v
+        ev.device = 0
+        Input.parse_input_event(ev)

@@ -35,6 +35,7 @@ var _threatening: Dictionary = {}
 ## 每只敌人最近一次起手时的相对高度
 var _windup_rel_y: Dictionary = {}
 var _last_health: float = -1.0
+var _held: Dictionary = {}
 
 ## 给调试面板显示的计数
 var dodge_count: int = 0
@@ -118,12 +119,17 @@ func _on_dodged(direction: Vector3) -> void:
 func _input(event: InputEvent) -> void:
     if _file == null:
         return
-    if event.is_action_pressed(&"pseudopod"):
-        _write("input", 0.0, NAN, -1, "attack")
-    elif event.is_action_pressed(&"heavy_attack"):
-        _write("input", 0.0, NAN, -1, "heavy")
-    elif event.is_action_pressed(&"dodge"):
-        _write("input", 0.0, NAN, -1, "dodge")
+    for pair: Array in [[&"pseudopod", "attack"], [&"heavy_attack", "heavy"], [&"dodge", "dodge"]]:
+        var action: StringName = pair[0]
+        if not event.is_action(action):
+            continue
+        # 只记"从没按到按下"的那一刻：扳机拉一次会上报好几次 is_action_pressed（见 Player._is_fresh_press）。
+        # 2026-11-27 之前的记录里 input 事件因此偏多
+        if event.is_action_released(action):
+            _held.erase(action)
+        elif event.is_action_pressed(action) and not _held.has(action):
+            _held[action] = true
+            _write("input", 0.0, NAN, -1, pair[1])
 
 
 func _on_bounced(direction: Vector3, chain_index: int) -> void:

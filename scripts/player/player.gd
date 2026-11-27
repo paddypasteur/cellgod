@@ -290,6 +290,8 @@ var _windup_time: float = 0.0
 var _hold_timer: float = 0.0
 var _buffer_timer: float = 0.0
 var _heavy_buffer: float = 0.0
+## 当前按住的动作，用来区分"新的一次按下"和"按住期间扳机位置的变化"
+var _held_actions: Dictionary = {}
 ## 当前这一击是重击
 var _attack_is_heavy: bool = false
 var _attack_kind: String = ""
@@ -360,11 +362,11 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
     # 按下事件走 _unhandled_input 而不是在物理帧里轮询 just_pressed：
     # 命中定格时物理帧暂停，轮询会漏掉定格期间的按键
-    if event.is_action_pressed(&"pseudopod"):
+    if _is_fresh_press(event, &"pseudopod"):
         _buffer_timer = input_buffer_time
-    elif event.is_action_pressed(&"heavy_attack"):
+    elif _is_fresh_press(event, &"heavy_attack"):
         _heavy_buffer = input_buffer_time
-    elif event.is_action_pressed(&"dodge"):
+    elif _is_fresh_press(event, &"dodge"):
         _dodge_buffer = dodge_buffer_time
     elif event.is_action_pressed(&"toggle_ability"):
         ability_chain_launch = not ability_chain_launch
@@ -372,7 +374,31 @@ func _unhandled_input(event: InputEvent) -> void:
             _end_chain("disabled")
 
 
+## 只认"从没按到按下"的那一刻。
+## 手柄扳机（RT 轻击）是模拟轴：拉下去的过程中会连续上报好几个位置，Godot 把每个超过死区的
+## 都当成一次 is_action_pressed。实测拉一次 = 5 次"按下"，于是一按就接出三段连击——
+## 开发者说的"一下打三下"就是这个（2026-11-27）。按钮没有这个问题，但统一走这里更保险
+func _is_fresh_press(event: InputEvent, action: StringName) -> bool:
+    if not event.is_action(action):
+        return false
+    if event.is_action_released(action):
+        _held_actions.erase(action)
+        return false
+    if event.is_action_pressed(action) and not _held_actions.has(action):
+        _held_actions[action] = true
+        return true
+    return false
+
+
+## 有些松开没有事件（比如脚本里 Input.action_release），每帧对一下实际按键状态，免得卡在"按住"
+func _sync_held_actions() -> void:
+    for action: StringName in _held_actions.keys():
+        if not Input.is_action_pressed(action):
+            _held_actions.erase(action)
+
+
 func _physics_process(delta: float) -> void:
+    _sync_held_actions()
     _invuln_timer = maxf(_invuln_timer - delta, 0.0)
     _stun_timer = maxf(_stun_timer - delta, 0.0)
     _hurt_flash_timer = maxf(_hurt_flash_timer - delta, 0.0)
