@@ -26,7 +26,12 @@ func _press(action: StringName) -> void:
     Input.action_press(action)
 
 
+## 和真手柄一样发一个松开事件：玩家只认"松开后再按下"为新的一次按键
 func _release(action: StringName) -> void:
+    var ev := InputEventAction.new()
+    ev.action = action
+    ev.pressed = false
+    Input.parse_input_event(ev)
     Input.action_release(action)
 
 
