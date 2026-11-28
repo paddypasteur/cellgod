@@ -270,17 +270,29 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 刃长度的弹簧
 @export var blade_length_stiffness: float = 380.0
 @export var blade_length_damping: float = 16.0
-## 挥扫的速度曲线：角度 = 进度 ^ 这个数。1 = 匀速；大于 1 = 起手慢、越挥越快、到头硬停。
+## 挥扫的速度曲线：角度 = 进度 ^ 这个数。1 = 匀速；大于 1 = 起手慢、越挥越快。
 ## 那一下"唰"是加速度给的。判定和画面都按这条曲线走
 @export var swing_ease_power: float = 2.0
+## 到头的缓冲（0 = 满速硬停，1 = 完全平滑地停）。2026-11-28 开发者："出刀特别快，有点机械了"——
+## 一刀之内要有起有收；两刀之间的边界不动
+@export_range(0.0, 1.0) var swing_end_soften: float = 0.3
 ## 根部有多宽（度）：膜上离出手方向这么多度以内的部分会被拉成刃
 @export_range(20.0, 85.0) var blade_root_deg: float = 72.0
 ## 刃的形状（2026-11-28 开发者："本质还是圆锥""要尽可能去模仿正常的那种冷兵器的样子"；
 ## 之后又补："它有可能两边都薄……只有自然地薄下来，它才是比较好的一个收尾的片状体，也比较好浑然一体。
 ## 关键是它前面不要有一个两个凸出来专门的尖"）。
 ## 所以：大部分长度几乎等宽；末段平滑收窄但不汇成尖点，剩下的一截变透明化掉；两侧都薄；单向弯，顺着挥击的弧
-## 刃宽（米，挥击平面内）
-@export var blade_width: float = 0.7
+## 刃宽（米）。2026-11-28 开发者："刀跟细胞的宽度是一样，显得笨重。武士刀比较细，但打起来还是很有力量感"
+@export var blade_width: float = 0.45
+## 刀面朝镜头最多翻多少度：刀细了以后，从默认镜头（俯角 35°）看平躺的刀面会被压成一条线，翻一点就还是一个面。
+## 只翻刀面，挥击的轨迹和判定不变
+@export_range(0.0, 80.0) var blade_face_roll_max_deg: float = 35.0
+## 软硬分在宽度上（DESIGN：刃口是硬的，刀身后缘是软的）：后缘的硬度（越小越透明、越跟着膜流动）；
+## 后缘往外飘出多少（相对半刃宽，每次出手随机起伏，前缘每次一样）
+@export_range(0.0, 1.0) var blade_back_hardness: float = 0.15
+@export_range(0.0, 2.0) var blade_back_ragged: float = 0.6
+## 刃两条长边的白边宽度（相对半刃宽）：和膜一样的边缘光
+@export_range(0.0, 1.0) var blade_edge_rim: float = 0.25
 ## 截面厚度 / 宽度（≤ 0.2 才像刀）
 @export_range(0.02, 0.5) var blade_thickness_ratio: float = 0.15
 ## 从全长的多少开始收窄（之前几乎等宽）
@@ -357,6 +369,9 @@ var _trail_strands: CPUParticles3D = null
 ## 膜的动画时间，按游戏时间累加（命中定格时停住）
 var _anim_time: float = 0.0
 var _blade_angle_prev: float = 0.0
+## 刀面朝向（厚度方向），每帧按镜头算；后缘随机种子，每次出手换一个
+var _blade_face: Vector3 = Vector3.UP
+var _blade_seed: float = 0.0
 var _blade_len_prev: float = 0.0
 ## 本次判定取样时，刃上离目标最近的点（世界坐标），交给目标做受击形变
 var _last_contact: Vector3 = Vector3.ZERO
@@ -936,6 +951,14 @@ func _update_cell_motion(delta: float) -> void:
         _body_material.set_shader_parameter(&"pod_dir", _blade_dir())
         _body_material.set_shader_parameter(&"pod_len", _blade_len)
         _body_material.set_shader_parameter(&"pod_axis", _blade_axis)
+        _update_blade_face()
+        _body_material.set_shader_parameter(&"pod_face", _blade_face)
+        var motion: Vector3 = _blade_axis.cross(_blade_dir()) * signf(_swing_end - _swing_start)
+        _body_material.set_shader_parameter(&"pod_lead_sign", signf(_blade_face.cross(_blade_dir()).dot(motion) + 0.0001))
+        _body_material.set_shader_parameter(&"pod_seed", _blade_seed)
+        _body_material.set_shader_parameter(&"pod_back_hardness", blade_back_hardness)
+        _body_material.set_shader_parameter(&"pod_back_ragged", blade_back_ragged)
+        _body_material.set_shader_parameter(&"pod_edge_rim", blade_edge_rim)
         _body_material.set_shader_parameter(&"pod_curve", bend)
         _body_material.set_shader_parameter(&"pod_root_cos", cos(deg_to_rad(blade_root_deg)))
         _body_material.set_shader_parameter(&"pod_width", blade_width)
@@ -987,13 +1010,35 @@ func _update_trail(attacking: bool, speed: float) -> void:
 func _blade_point(t: float, edge: float) -> Vector3:
     var dir: Vector3 = _blade_dir()
     var along: float = lerpf(body_radius * 0.35, body_radius + _blade_len, t)
-    var ew: Vector3 = _blade_axis.cross(dir).normalized()
+    var ew: Vector3 = _blade_face.cross(dir).normalized()
     var x: float = clampf((t - blade_tip_start) / (1.0 - blade_tip_start), 0.0, 1.0)
     var w: float = lerpf(1.0, blade_keep_width, t / blade_tip_start) if t < blade_tip_start \
             else blade_keep_width * lerpf(1.0, blade_end_width, smoothstep(0.0, 1.0, x))
     var hw: float = 0.5 * blade_width * w * clampf(_blade_len, 0.3, 1.0)
     var p: Vector3 = dir * along + ew * hw * edge
     return p.rotated(_blade_axis, _blade_curve_now() * t * t)
+
+
+## 刀面朝镜头翻一点（只翻刀面，不动挥击轨迹）：把挥动轴绕刀的长度方向转向镜头，最多 blade_face_roll_max_deg
+func _update_blade_face() -> void:
+    var dir: Vector3 = _blade_dir()
+    var n0: Vector3 = _blade_axis
+    var cam: Camera3D = get_viewport().get_camera_3d()
+    if cam == null:
+        _blade_face = n0
+        return
+    var to_cam: Vector3 = cam.global_position - (global_position + dir * (body_radius + _blade_len * 0.5))
+    to_cam -= dir * to_cam.dot(dir)
+    if to_cam.length_squared() < 0.0001:
+        _blade_face = n0
+        return
+    to_cam = to_cam.normalized()
+    # 刀面两面一样，取离镜头近的那一面来翻
+    if n0.dot(to_cam) < 0.0:
+        n0 = -n0
+    var ang: float = n0.signed_angle_to(to_cam, dir)
+    var lim: float = deg_to_rad(blade_face_roll_max_deg)
+    _blade_face = n0.rotated(dir, clampf(ang, -lim, lim))
 
 
 ## 刀身的弯（弧度，末端处）：顺着挥击的弧往后弯
@@ -1012,6 +1057,7 @@ func _reset_blade_for_swing() -> void:
     _blade_axis = _swing_axis
     _blade_angle = _swing_start
     _blade_angle_prev = _swing_start
+    _blade_seed = randf() * 100.0
     _blade_angle_vel = 0.0
 
 
@@ -1366,7 +1412,8 @@ func _pod_dir() -> Vector3:
 
 ## 挥扫的角度进度（0..1）：起手慢、越挥越快、到头硬停
 func _swing_progress() -> float:
-    return pow(clampf(_swing_t, 0.0, 1.0), swing_ease_power)
+    var t: float = clampf(_swing_t, 0.0, 1.0)
+    return lerpf(pow(t, swing_ease_power), smoothstep(0.0, 1.0, t), swing_end_soften)
 
 
 ## 把挥扫推进到 to_t，按角度步长逐段检测，防止一帧扫过头跳过目标。

@@ -77,11 +77,27 @@ uniform float pod_shrink = 0.0;
 uniform float pod_dent = 0.0;
 // 根部从身体过渡到刃的那一段占全长多少
 uniform float pod_root_blend = 0.15;
-// 刃的部分硬化（不透明、少起伏）
-uniform float pod_hardness : hint_range(0.0, 1.0) = 0.8;
+// 软硬分在宽度上（DESIGN 2026-11-28：刃口是硬的，刀身后缘是软的。锋利在前缘，流动在后缘）：
+// 前缘的硬度（不透明、不起伏、形状每次一样）；后缘的硬度（半透明、跟着膜一起流动）
+uniform float pod_hardness : hint_range(0.0, 1.0) = 0.9;
+uniform float pod_back_hardness : hint_range(0.0, 1.0) = 0.15;
+// 刀面朝向（厚度方向，模型空间）。默认就是挥动轴；脚本会把它朝镜头翻一点，刀细了也看得见是个面
+uniform vec3 pod_face = vec3(0.0, 1.0, 0.0);
+// 前缘在截面 +x 一侧还是 -x 一侧（±1），由挥击方向决定
+uniform float pod_lead_sign = 1.0;
+// 后缘的不规则：每次出手换一个随机种子；后缘往外飘出多少（相对半刃宽）
+uniform float pod_seed = 0.0;
+uniform float pod_back_ragged = 0.6;
+// 刃两条长边的边缘光宽度（相对半刃宽）。刃的截面极扁，法线几乎全朝上下，
+// 菲涅尔边缘光只落在刃口不到一个像素宽的一圈上，所以看起来刃没有白边——这里按截面位置补上
+uniform float pod_edge_rim = 0.25;
 
 varying float v_blade;
 varying float v_fade;
+// 刃上的点离刃宽两边有多近（0 = 刃中线，1 = 刃口），给边缘光用
+varying float v_edge;
+// 这一点的硬度（前缘硬、后缘软）
+varying float v_hard;
 
 float wobble(vec3 p, float t) {
     return sin(p.x * flow_scale + t * 1.3)
@@ -106,13 +122,16 @@ void vertex() {
     // 刃：t = 0 在根部边缘、1 在末端。膜上的这一片按 t 重新摆成刃的形状
     float s = 0.0;
     v_fade = 1.0;
+    v_edge = 0.0;
+    v_hard = hardness;
     if (pod_len > 0.001) {
         float t = smoothstep(pod_root_cos, 1.0, dot(u, pod_dir));
         s = t;
-        // 截面坐标：x 沿刃宽（挥击平面内），y 沿厚度（挥动轴）
-        vec3 ew = normalize(cross(pod_axis, pod_dir));
+        // 截面坐标：x 沿刃宽，y 沿厚度（刀面朝向）
+        vec3 face = normalize(pod_face);
+        vec3 ew = normalize(cross(face, pod_dir));
         vec3 lat = rest - pod_dir * dot(rest, pod_dir);
-        vec2 c = vec2(dot(lat, ew), dot(lat, pod_axis));
+        vec2 c = vec2(dot(lat, ew), dot(lat, face));
         vec2 cn = length(c) > 1e-5 ? normalize(c) : vec2(0.0);
         // 轮廓：几乎等宽；末段沿一条平滑曲线收窄（收窄到头时两边是平行的，不形成尖角），
         // 收到 pod_end_width 为止，再往外由透明度化掉。刃很短（刚伸出 / 快收回）时宽度跟着缩，不留一块方板
@@ -124,7 +143,15 @@ void vertex() {
         // 两侧都薄：透镜形截面，越往末端越薄
         float ht = hw * pod_thickness_ratio * (1.0 - 0.7 * x);
         float along = mix(r * 0.35, r + pod_len, t);
-        vec3 blade = pod_dir * along + ew * (hw * cn.x) + pod_axis * (ht * cn.y * (1.0 - 0.3 * abs(cn.x)));
+        // lead = 1 在前缘、-1 在后缘。前缘形状固定；后缘按随机种子和时间往外飘、起伏，每次出手都不一样
+        float lead = cn.x * pod_lead_sign;
+        float back = max(-lead, 0.0);
+        float ragged = 0.55 + 0.45 * sin(t * 9.0 + pod_seed * 17.3 + anim_time * 7.0)
+            * sin(t * 4.3 - pod_seed * 5.1 + anim_time * 3.1);
+        float hw_x = hw * (1.0 + pod_back_ragged * back * ragged);
+        vec3 blade = pod_dir * along + ew * (hw_x * cn.x) + face * (ht * cn.y * (1.0 - 0.3 * abs(cn.x)));
+        v_edge = abs(cn.x);
+        v_hard = mix(pod_back_hardness, pod_hardness, smoothstep(-0.4, 0.5, lead));
         v_fade = 1.0 - smoothstep(pod_fade_start, 1.0, x);
         // 体积守恒：身体整体缩一圈，刃根周围再凹进去一圈（刃就是从这里抽走的物质）
         float near_root = smoothstep(pod_root_cos - 0.6, pod_root_cos, dot(u, pod_dir));
@@ -136,12 +163,12 @@ void vertex() {
         float ang = pod_curve * t * t;
         p = rotate_axis(p, pod_axis, ang);
         // 扁截面的法线：宽面朝挥动轴方向，刃口朝两侧
-        vec3 nb = normalize(ew * cn.x * pod_thickness_ratio + pod_axis * cn.y + pod_dir * 0.02);
+        vec3 nb = normalize(ew * cn.x * pod_thickness_ratio + face * cn.y + pod_dir * 0.02);
         n = normalize(mix(NORMAL, nb, b));
         n = rotate_axis(n, pod_axis, ang);
     }
     v_blade = s * step(0.001, pod_len);
-    float hard_local = max(hardness, v_blade * pod_hardness);
+    float hard_local = max(hardness, v_blade * v_hard);
 
     // 胞质流动：挥击时顺着 flow_dir 拉成条纹并被带着走，幅度变大
     float t = anim_time * flow_speed * (1.0 + flow_align * 2.0);
@@ -178,8 +205,10 @@ void fragment() {
     // 大片掠射表面菲涅尔虽高但变化慢 → 落不进带里，不会整片发亮
     float band = clamp(fwidth(fres) * rim_pixels, 0.005, rim_max_band);
     float top = 0.985;
-    float hard = max(hardness, v_blade * pod_hardness);
+    float hard = max(hardness, v_blade * v_hard);
     float rim = smoothstep(top - band, top - band * 0.3, fres) * mix(1.0, 1.2, hard);
+    // 刃的两条长边：和膜一样的白边（见 pod_edge_rim 的说明）
+    rim = max(rim, smoothstep(1.0 - pod_edge_rim, 1.0, v_edge) * smoothstep(0.05, 0.25, v_blade));
     ALBEDO = base_color.rgb;
     // 边缘处不透明度拉高：剪影是实的，只有中间是透的
     ALPHA = clamp(mix(body_alpha, 1.0, hard) + rim * 0.7, 0.0, 1.0) * v_fade;
