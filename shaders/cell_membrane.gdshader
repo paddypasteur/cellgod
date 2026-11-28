@@ -53,15 +53,25 @@ uniform float pod_root_cos = 0.3;
 // 刃宽（米）、截面厚度 / 宽度
 uniform float pod_width = 0.5;
 uniform float pod_thickness_ratio = 0.15;
-// 从全长的多少开始收尖；收尖之前宽度只收窄到多少
-uniform float pod_tip_start = 0.78;
+// 从全长的多少开始收窄；收窄之前宽度只收到多少。
+// 2026-11-28 开发者："前面不要有一个两个凸出来专门的尖"——末端不汇成尖点，而是越来越薄、渐渐化开（变透明）
+uniform float pod_tip_start = 0.7;
 uniform float pod_keep_width = 0.9;
+// 末端最窄还剩多宽（相对刃宽）：不收到 0，所以没有尖点；剩下的这一截由透明度化掉
+uniform float pod_end_width = 0.15;
+// 末端从多少开始变透明（相对收窄段：0 = 收窄一开始，1 = 最末端）
+uniform float pod_fade_start = 0.35;
+// 体积守恒（DESIGN：一体感 = 体积守恒。鼓出去多少，身上就少多少）：
+// 刃伸出时身体整体缩小多少（半径比例），刃根周围凹进去多少（半径比例）。脚本按刃伸出的程度给值
+uniform float pod_shrink = 0.0;
+uniform float pod_dent = 0.0;
 // 根部从身体过渡到刃的那一段占全长多少
 uniform float pod_root_blend = 0.15;
 // 刃的部分硬化（不透明、少起伏）
 uniform float pod_hardness : hint_range(0.0, 1.0) = 0.8;
 
 varying float v_blade;
+varying float v_fade;
 
 float wobble(vec3 p, float t) {
     return sin(p.x * flow_scale + t * 1.3)
@@ -83,8 +93,9 @@ void vertex() {
     vec3 n = NORMAL;
     vec3 p = rest;
 
-    // 刃：t = 0 在根部边缘、1 在刃尖。膜上的这一片按 t 重新摆成刀的形状
+    // 刃：t = 0 在根部边缘、1 在末端。膜上的这一片按 t 重新摆成刃的形状
     float s = 0.0;
+    v_fade = 1.0;
     if (pod_len > 0.001) {
         float t = smoothstep(pod_root_cos, 1.0, dot(u, pod_dir));
         s = t;
@@ -93,18 +104,24 @@ void vertex() {
         vec3 lat = rest - pod_dir * dot(rest, pod_dir);
         vec2 c = vec2(dot(lat, ew), dot(lat, pod_axis));
         vec2 cn = length(c) > 1e-5 ? normalize(c) : vec2(0.0);
-        // 轮廓：几乎等宽，最后一段收尖。刃很短（刚伸出 / 快收回）时宽度跟着缩，不留一块方板
+        // 轮廓：几乎等宽；末段沿一条平滑曲线收窄（收窄到头时两边是平行的，不形成尖角），
+        // 收到 pod_end_width 为止，再往外由透明度化掉。刃很短（刚伸出 / 快收回）时宽度跟着缩，不留一块方板
+        float x = clamp((t - pod_tip_start) / (1.0 - pod_tip_start), 0.0, 1.0);
         float w = t < pod_tip_start
             ? mix(1.0, pod_keep_width, t / pod_tip_start)
-            : pod_keep_width * (1.0 - (t - pod_tip_start) / (1.0 - pod_tip_start));
+            : pod_keep_width * mix(1.0, pod_end_width, smoothstep(0.0, 1.0, x));
         float hw = 0.5 * pod_width * w * clamp(pod_len / 1.0, 0.3, 1.0);
-        float ht = hw * pod_thickness_ratio;
-        // 透镜形截面：宽度方向两边收成刃口
+        // 两侧都薄：透镜形截面，越往末端越薄
+        float ht = hw * pod_thickness_ratio * (1.0 - 0.7 * x);
         float along = mix(r * 0.35, r + pod_len, t);
         vec3 blade = pod_dir * along + ew * (hw * cn.x) + pod_axis * (ht * cn.y * (1.0 - 0.3 * abs(cn.x)));
-        // 根部一小段从身体的球面平滑过渡到刃
+        v_fade = 1.0 - smoothstep(pod_fade_start, 1.0, x);
+        // 体积守恒：身体整体缩一圈，刃根周围再凹进去一圈（刃就是从这里抽走的物质）
+        float near_root = smoothstep(pod_root_cos - 0.6, pod_root_cos, dot(u, pod_dir));
+        vec3 body = rest * (1.0 - pod_shrink) - u * r * pod_dent * near_root;
+        // 根部一小段从（缩过的）身体平滑过渡到刃
         float b = smoothstep(0.0, pod_root_blend, t);
-        p = mix(rest, blade, b);
+        p = mix(body, blade, b);
         // 单向轻微弯曲，越往刃尖越弯
         float ang = pod_curve * t * t;
         p = rotate_axis(p, pod_axis, ang);
@@ -144,8 +161,8 @@ void fragment() {
     float rim = smoothstep(top - band, top - band * 0.3, fres) * mix(1.0, 1.2, hard);
     ALBEDO = base_color.rgb;
     // 边缘处不透明度拉高：剪影是实的，只有中间是透的
-    ALPHA = clamp(mix(body_alpha, 1.0, hard) + rim * 0.7, 0.0, 1.0);
-    EMISSION = rim_color.rgb * rim * rim_strength;
+    ALPHA = clamp(mix(body_alpha, 1.0, hard) + rim * 0.7, 0.0, 1.0) * v_fade;
+    EMISSION = rim_color.rgb * rim * rim_strength * v_fade;
     ROUGHNESS = mix(0.55, 0.12, hard);
     SPECULAR = mix(0.35, 0.9, hard);
 }

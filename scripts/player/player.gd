@@ -260,8 +260,9 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export_range(0.0, 1.0) var mass_squash_light: float = 0.45
 @export_range(0.0, 1.0) var mass_squash_heavy: float = 0.9
 ## 发：刃伸出去时整团质量跟着往前冲的程度（轻击 / 重击）
-@export_range(0.0, 1.0) var mass_follow_light: float = 0.4
-@export_range(0.0, 1.0) var mass_follow_heavy: float = 0.55
+## （2026-11-28 体积守恒之后调小：身体要为刃付出物质而缩小，不能同时往前鼓）
+@export_range(0.0, 1.0) var mass_follow_light: float = 0.15
+@export_range(0.0, 1.0) var mass_follow_heavy: float = 0.2
 ## 整团质量的弹簧：刚度越大跟得越紧；阻尼越小，收招后晃得越久
 @export var mass_stiffness: float = 160.0
 @export var mass_damping: float = 8.0
@@ -279,20 +280,34 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export var swing_ease_power: float = 2.0
 ## 根部有多宽（度）：膜上离出手方向这么多度以内的部分会被拉成刃
 @export_range(20.0, 85.0) var blade_root_deg: float = 72.0
-## 刃的形状（2026-11-28 开发者："本质还是圆锥""特别规则的圆锥""要尽可能去模仿正常的那种冷兵器的样子"）。
-## 照冷兵器：大部分长度几乎等宽，只在最后一段收尖；截面是透镜形、有刃口；整体直的，只带一点单向的弯
+## 刃的形状（2026-11-28 开发者："本质还是圆锥""要尽可能去模仿正常的那种冷兵器的样子"；
+## 之后又补："它有可能两边都薄……只有自然地薄下来，它才是比较好的一个收尾的片状体，也比较好浑然一体。
+## 关键是它前面不要有一个两个凸出来专门的尖"）。
+## 所以：大部分长度几乎等宽；末段平滑收窄但不汇成尖点，剩下的一截变透明化掉；两侧都薄；单向弯，顺着挥击的弧
 ## 刃宽（米，挥击平面内）
 @export var blade_width: float = 0.7
 ## 截面厚度 / 宽度（≤ 0.2 才像刀）
 @export_range(0.02, 0.5) var blade_thickness_ratio: float = 0.15
-## 从全长的多少开始收尖（之前几乎等宽）
-@export_range(0.3, 0.95) var blade_tip_start: float = 0.78
+## 从全长的多少开始收窄（之前几乎等宽）
+@export_range(0.3, 0.95) var blade_tip_start: float = 0.7
+## 末端最窄还剩多宽（相对刃宽）。不收到 0 = 没有尖点
+@export_range(0.0, 1.0) var blade_end_width: float = 0.15
+## 收窄段从多少开始变透明（0 = 一开始收窄就开始化，1 = 只在最末端）
+@export_range(0.0, 1.0) var blade_fade_start: float = 0.35
 ## 等宽段到收尖前宽度只收窄到多少（1 = 完全等宽）
 @export_range(0.5, 1.0) var blade_keep_width: float = 0.9
 ## 根部从身体鼓起来铺开成片的过渡段占全长多少：要短，不然整条看起来都在收细
 @export_range(0.02, 0.5) var blade_root_blend: float = 0.15
-## 刀身单向的轻微弯曲（弧度，刃尖处），弯向挥过来的方向，像军刀。不要大，大了就是鞭子
-@export var blade_curve: float = 0.1
+## 刀身单向的弯曲（弧度，末端处），顺着挥击的弧往后弯——"自然而然呼过去"。是固定的形状，不是晃出来的
+@export var blade_curve: float = 0.25
+## 体积守恒（DESIGN：一体感 = 体积守恒。鼓出去多少，身上就少多少）。刃完全伸出时：
+## 身体整体缩小多少（半径比例）、刃根周围再凹进去多少（半径比例）。收回时按刃的长度鼓回来
+@export_range(0.0, 0.6) var body_shrink: float = 0.18
+@export_range(0.0, 0.8) var body_dent: float = 0.25
+## 边缘脱尾：挥动时从刃的两条薄边甩出、拖在挥击后面的丝缕。数量（同时存在的上限）、寿命（秒）
+@export var wisps_enabled: bool = true
+@export var wisp_amount: int = 60
+@export var wisp_lifetime: float = 0.3
 ## 胞质被带着走：挥击时膜纹顺挥击方向流动，挥完按这个速度散回乱流（每秒）
 @export var flow_align_decay: float = 2.5
 @export var flow_advect_speed: float = 5.0
@@ -340,6 +355,7 @@ var _flow_dir: Vector3 = Vector3.RIGHT
 var _core: MeshInstance3D = null
 var _core_base: Vector3 = Vector3.ZERO
 var _droplets: CPUParticles3D = null
+var _wisps: CPUParticles3D = null
 
 ## 锁定目标（null = 没锁）
 var _lock_target: Node3D = null
@@ -911,11 +927,19 @@ func _update_cell_motion(delta: float) -> void:
         _body_material.set_shader_parameter(&"pod_tip_start", blade_tip_start)
         _body_material.set_shader_parameter(&"pod_keep_width", blade_keep_width)
         _body_material.set_shader_parameter(&"pod_root_blend", blade_root_blend)
+        _body_material.set_shader_parameter(&"pod_end_width", blade_end_width)
+        _body_material.set_shader_parameter(&"pod_fade_start", blade_fade_start)
+        var out_ratio: float = clampf(_blade_len / maxf(_target_length, 0.001), 0.0, 1.0)
+        _body_material.set_shader_parameter(&"pod_shrink", body_shrink * out_ratio)
+        _body_material.set_shader_parameter(&"pod_dent", body_dent * out_ratio)
         _body_material.set_shader_parameter(&"flow_dir", _flow_dir)
         _body_material.set_shader_parameter(&"flow_align", _flow_align)
         _body_material.set_shader_parameter(&"flow_advect", _flow_advect)
     if _core != null:
         _core.position = _core_base + _mass * body_radius * core_follow
+        # 核跟着身体一起缩：只缩膜不缩核，刃根那里就剩一个硬球，像刀柄头
+        var shrink_now: float = body_shrink * clampf(_blade_len / maxf(_target_length, 0.001), 0.0, 1.0)
+        _core.scale = Vector3.ONE * (1.0 - shrink_now)
 
     # 刃尖甩出的小液滴：只在甩得快的时候出，方向是刃尖的运动方向，散得很开
     if _droplets != null:
@@ -926,6 +950,17 @@ func _update_cell_motion(delta: float) -> void:
             _droplets.global_position = global_position + tip
             _droplets.direction = _flow_dir
             _droplets.initial_velocity_max = 2.0 + speed * 0.25
+    # 丝缕：发射区是一条沿着刃的细长盒子，粒子留在世界里不跟着刃走，所以自然拖在挥击后面
+    if _wisps != null:
+        var sweeping: bool = attacking and _blade_len > 0.5 and speed > 3.0
+        _wisps.emitting = wisps_enabled and sweeping
+        if sweeping:
+            var mid_len: float = body_radius + _blade_len * 0.6
+            var along: Vector3 = _blade_dir().rotated(_blade_axis, bend * 0.4)
+            var side: Vector3 = _blade_axis.cross(along).normalized()
+            _wisps.global_transform = Transform3D(Basis(along, _blade_axis, side), global_position + along * mid_len)
+            _wisps.emission_box_extents = Vector3(_blade_len * 0.45, 0.02, blade_width * 0.5)
+            _wisps.direction = -_flow_dir
 
 
 ## 画面上的刃当前指向（追判定的弹簧，不是判定本身）
@@ -980,6 +1015,43 @@ func _create_droplets() -> void:
     _droplets.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
     add_child(_droplets)
     _droplets.top_level = true
+    # 丝缕：很细的长条，顺着自己的速度方向拉长；长短、粗细、寿命都散开，不要一排整齐的飘带
+    _wisps = CPUParticles3D.new()
+    _wisps.name = "EdgeWisps"
+    var strand := CylinderMesh.new()
+    strand.top_radius = 0.008
+    strand.bottom_radius = 0.018
+    strand.height = 0.35
+    strand.radial_segments = 4
+    strand.rings = 1
+    var wm := StandardMaterial3D.new()
+    wm.albedo_color = Color(look.membrane_color.lightened(0.4), 0.6)
+    wm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+    wm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    strand.material = wm
+    _wisps.mesh = strand
+    _wisps.amount = wisp_amount
+    _wisps.lifetime = wisp_lifetime
+    _wisps.lifetime_randomness = 0.6
+    _wisps.local_coords = false
+    _wisps.emitting = false
+    _wisps.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+    _wisps.particle_flag_align_y = true
+    _wisps.spread = 25.0
+    _wisps.initial_velocity_min = 0.3
+    _wisps.initial_velocity_max = 1.5
+    _wisps.gravity = Vector3.ZERO
+    _wisps.damping_min = 1.0
+    _wisps.damping_max = 3.0
+    _wisps.scale_amount_min = 0.4
+    _wisps.scale_amount_max = 1.5
+    var fade := Curve.new()
+    fade.add_point(Vector2(0.0, 1.0))
+    fade.add_point(Vector2(1.0, 0.2))
+    _wisps.scale_amount_curve = fade
+    _wisps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+    add_child(_wisps)
+    _wisps.top_level = true
 
 
 # ---------------------------------------------------------------- 锁定
