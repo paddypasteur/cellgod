@@ -54,13 +54,22 @@ extends Camera3D
 @export var bounce_yaw_lead_rate: float = 5.0
 
 @export_group("锁定时")
-## 锁定时镜头偏向目标的强度（0 = 完全不管，1 = 很快对准）。默认偏弱：这是球形战场，
-## 镜头焊死在一只敌人身上就看不见其他方向的威胁（DESIGN《镜头与锁定》）
-@export_range(0.0, 1.0) var lock_bias: float = 0.3
-## 偏向的速度
-@export var lock_bias_rate: float = 2.0
-## 俯仰也跟着偏一点：目标在上/下方时，镜头抬/低头多少（相对目标仰角的比例）
-@export_range(0.0, 1.0) var lock_pitch_follow: float = 0.4
+## 2026-11-28 策划改方案（两名玩家都说半套锁定难用）：锁定时镜头**完整接管**，右摇杆不起作用，
+## 持续把目标保持在画面中心区域；张望 = 再按一次锁定键解锁
+## 镜头转向目标的跟随速度。越大目标越稳地钉在画面中心
+@export var lock_follow_rate: float = 8.0
+## 上下也跟：目标在上方镜头就抬起来（教玩家垂直维度，不压制）。1 = 完全跟随目标的仰角
+@export_range(0.0, 1.0) var lock_pitch_follow: float = 1.0
+## 锁定时俯仰的范围（度）。比手动范围宽，正上方/正下方的目标也能尽量框住
+@export_range(-80.0, 80.0) var lock_pitch_min_deg: float = -70.0
+@export_range(-80.0, 80.0) var lock_pitch_max_deg: float = 70.0
+## 注视点往目标方向挪多少（0 = 看主角，1 = 看目标）。挪一点让主角和目标都在画面里
+@export_range(0.0, 1.0) var lock_look_blend: float = 0.3
+## 锁定时镜头额外拉远多少米、视野加宽多少度：球面上留在画面里的部分更多
+@export var lock_extra_distance: float = 2.0
+@export var lock_extra_fov_deg: float = 10.0
+## 拉远 / 加宽的过渡速度
+@export var lock_zoom_rate: float = 5.0
 
 @export_group("震动")
 ## 震动强度为 1 时镜头最多偏移多少米
@@ -74,14 +83,16 @@ var _yaw: float = 0.0
 var _pitch_deg: float = 0.0
 var _pivot: Vector3 = Vector3.ZERO
 var _manual_cooldown: float = 0.0
-## 右摇杆被推住多久了：锁定时要推住超过"拨一下"的时长才算转镜头，免得拨摇杆切换目标时镜头也跟着晃
-var _stick_hold_time: float = 0.0
+var _lock_amount: float = 0.0
+var _base_fov: float = 75.0
+var _lock_look: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
     var f: Vector3 = -global_basis.z
     _yaw = atan2(-f.x, -f.z)
     _pitch_deg = pitch_deg
+    _base_fov = fov
     if target != null:
         _pivot = target.global_position
     _apply()
@@ -95,7 +106,7 @@ func _physics_process(delta: float) -> void:
     _pivot = _pivot.lerp(target.global_position, 1.0 - exp(-position_follow_rate * delta))
     _update_manual(delta)
     _update_yaw(delta)
-    _update_lock_bias(delta)
+    _update_lock(delta)
     _update_bounce_camera(delta)
     _trauma = maxf(_trauma - shake_decay * delta, 0.0)
     _apply()
@@ -126,19 +137,27 @@ func _lock_target() -> Node3D:
     return null
 
 
-## 锁定时镜头轻微偏向目标：玩家推右摇杆张望时让开，松手过一会儿再慢慢转回来
-func _update_lock_bias(delta: float) -> void:
+## 锁定：镜头站到"主角 → 目标"连线的后方，目标落在画面中心区域；拉远、视野加宽。
+## 解锁后从当前角度直接交还玩家，不回弹
+func _update_lock(delta: float) -> void:
     var lock := _lock_target()
-    if lock == null or lock_bias <= 0.0 or _manual_cooldown > 0.0:
+    var w_zoom: float = 1.0 - exp(-lock_zoom_rate * delta)
+    _lock_amount = lerpf(_lock_amount, 1.0 if lock != null else 0.0, w_zoom)
+    fov = _base_fov + lock_extra_fov_deg * _lock_amount
+    if lock == null:
         return
+    _lock_look = lock.global_position
     var to: Vector3 = lock.global_position - target.global_position
     var flat: float = Vector2(to.x, to.z).length()
-    if flat < 0.01:
+    if to.length() < 0.01:
         return
-    var w: float = (1.0 - exp(-lock_bias_rate * delta)) * lock_bias
-    _yaw = lerp_angle(_yaw, atan2(-to.x, -to.z), w)
+    var w: float = 1.0 - exp(-lock_follow_rate * delta)
+    if flat > 0.01:
+        _yaw = lerp_angle(_yaw, atan2(-to.x, -to.z), w)
     var want_pitch: float = pitch_deg + rad_to_deg(atan2(to.y, flat)) * lock_pitch_follow
-    _pitch_deg = clampf(lerpf(_pitch_deg, want_pitch, w), pitch_min_deg, pitch_max_deg)
+    want_pitch = clampf(want_pitch, lock_pitch_min_deg, lock_pitch_max_deg)
+    _pitch_deg = lerpf(_pitch_deg, want_pitch, w)
+    _manual_cooldown = 0.0
 
 
 ## 叠加一次震动，强度 0..1，多次受击会叠加但不超过 1
@@ -149,14 +168,9 @@ func add_shake(amount: float) -> void:
 func _update_manual(delta: float) -> void:
     _manual_cooldown = maxf(_manual_cooldown - delta, 0.0)
     var stick: Vector2 = Input.get_vector(&"camera_left", &"camera_right", &"camera_down", &"camera_up", stick_deadzone)
-    if stick == Vector2.ZERO:
-        _stick_hold_time = 0.0
+    # 锁定时镜头归锁定管，右摇杆不起作用
+    if stick == Vector2.ZERO or _lock_target() != null:
         return
-    _stick_hold_time += delta
-    if _lock_target() != null:
-        var flick_time: Variant = target.get("lock_flick_time")
-        if flick_time != null and _stick_hold_time <= float(flick_time):
-            return
     _manual_cooldown = auto_follow_resume_delay
     # 摇杆往右推 = 镜头往右看 = yaw 减小（yaw 正方向是从上往下看逆时针）
     _yaw -= deg_to_rad(stick_yaw_speed_deg) * stick.x * delta
@@ -187,7 +201,9 @@ func _apply() -> void:
     var orbit: Basis = Basis(Vector3.UP, _yaw) * Basis(Vector3.RIGHT, pitch)
     # orbit.x 是镜头右方；绕 X 轴的俯仰不改变它，所以它始终水平，平移不会带来 roll
     var look_point: Vector3 = _pivot + Vector3.UP * look_height_offset + orbit.x * shoulder_offset
-    global_position = look_point + orbit * Vector3(0.0, 0.0, distance + _extra_distance)
+    if _lock_amount > 0.001:
+        look_point = look_point.lerp(_lock_look, lock_look_blend * _lock_amount)
+    global_position = look_point + orbit * Vector3(0.0, 0.0, distance + _extra_distance + lock_extra_distance * _lock_amount)
     look_at(look_point, Vector3.UP)
     # 震动只做平移、放在 look_at 之后：不改变朝向，绝不会带出 roll
     if _trauma > 0.0:

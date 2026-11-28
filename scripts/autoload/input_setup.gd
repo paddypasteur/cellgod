@@ -3,7 +3,7 @@ extends Node
 ## 只在 项目设置→输入映射 里没有同名动作时才注册，
 ## 所以开发者在编辑器里定义的键位永远优先，这里只是兜底。
 ##
-## 手柄：左摇杆移动，LB/LT 上升/下降，右摇杆转镜头，RT 轻击（连按出连段），RB 重击，B 闪避
+## 手柄：左摇杆移动，LB/LT 上升/下降，右摇杆转镜头，RT 轻击（连按出连段），RB 重击，B 闪避，R3 锁定、十字键左右切换目标
 ## 键鼠（临时占位，方案未定）：WASD 移动，空格/Shift 上升/下降，左键轻击，E 重击，右键闪避；
 ##       暂时没有鼠标转镜头
 
@@ -40,6 +40,9 @@ func _enter_tree() -> void:
     _add_action(&"pseudopod", [_mouse(MOUSE_BUTTON_LEFT), _joy_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)])
     # 锁定 / 解锁：R3（类魂通用约定）。键鼠临时用 Q 或鼠标中键
     _add_action(&"lock_on", [_joy_button(JOY_BUTTON_RIGHT_STICK), _key(KEY_Q), _mouse(MOUSE_BUTTON_MIDDLE)])
+    # 切换锁定目标：十字键左右（2026-11-28 开发者："右摇杆不是要控制摄像头的吗？设置成十字键的左右"）。键盘临时用 Z / C
+    _add_action(&"lock_prev", [_joy_button(JOY_BUTTON_DPAD_LEFT), _key(KEY_Z)])
+    _add_action(&"lock_next", [_joy_button(JOY_BUTTON_DPAD_RIGHT), _key(KEY_C)])
     # 重击：独立按键（不是蓄力）。RB 在上下移动挪到左手后空出来了
     _add_action(&"heavy_attack", [_key(KEY_E), _joy_button(JOY_BUTTON_RIGHT_SHOULDER)])
 

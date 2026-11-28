@@ -268,20 +268,14 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export var body_stretch_damping: float = 9.0
 
 @export_group("锁定")
-## 2026-11-28 开发者："现在不知道我在锁定谁。锁定之后攻击就应该朝着他；按摇杆切换。"
-## R3 / Q / 鼠标中键 锁定或解锁；锁定时快速拨一下右摇杆切换目标。
-## 锁定决定攻击朝向和身体转向，**不焊死镜头**（镜头只轻微偏向目标，推住右摇杆随时能看别处）
+## R3 / Q / 鼠标中键 锁定或解锁；十字键 ← → （键盘 Z / C）切换到画面上左边 / 右边相邻的目标。
+## 锁定决定攻击朝向和身体转向，镜头由 FollowCamera 完整接管（2026-11-28 策划改方案）
 ## 多远以内能锁上（米）
 @export var lock_range: float = 18.0
 ## 超过多远自动解锁（米）
 @export var lock_break_range: float = 25.0
 ## 锁定时在离准星多远的范围里找目标（屏幕高度的比例），比普通索敌宽
 @export_range(0.0, 1.0) var lock_acquire_screen_radius: float = 0.45
-## 右摇杆推过这个幅度、并在 lock_flick_time 秒内松回去，算"拨一下"切换目标；推住更久就是转镜头张望
-@export_range(0.1, 1.0) var lock_flick_threshold: float = 0.7
-@export var lock_flick_time: float = 0.25
-## 切换时只在拨动方向两侧这么多度以内找下一个目标
-@export_range(10.0, 180.0) var lock_switch_max_angle_deg: float = 70.0
 ## 锁定标记的颜色（敌人描边也换成这个颜色）
 @export var lock_color: Color = Color(1.0, 0.3, 0.55)
 
@@ -306,9 +300,6 @@ var _stretch_dir: Vector3 = Vector3.FORWARD
 ## 锁定目标（null = 没锁）
 var _lock_target: Node3D = null
 var _lock_marker: MeshInstance3D = null
-var _flick_active: bool = false
-var _flick_timer: float = 0.0
-var _flick_dir: Vector2 = Vector2.ZERO
 
 ## 当前这次前摇是重击的（否则是轻击）
 var _windup_is_heavy: bool = false
@@ -430,6 +421,10 @@ func _unhandled_input(event: InputEvent) -> void:
             _buffer_timer = maxf(_recovery_left, 0.0) + light_buffer_window
     elif _is_fresh_press(event, &"lock_on"):
         _toggle_lock()
+    elif _is_fresh_press(event, &"lock_prev"):
+        _switch_lock(-1.0)
+    elif _is_fresh_press(event, &"lock_next"):
+        _switch_lock(1.0)
     elif _is_fresh_press(event, &"heavy_attack"):
         _heavy_buffer = input_buffer_time
     elif _is_fresh_press(event, &"dodge"):
@@ -899,43 +894,23 @@ func _set_lock(target: Node3D, kind: String) -> void:
     lock_changed.emit(kind)
 
 
-## 每帧：目标死了、跑太远就自动解锁；锁定时检测右摇杆"拨一下"切换目标
-func _update_lock(delta: float) -> void:
-    if _lock_target != null:
-        if not is_instance_valid(_lock_target) or not _lock_target.is_in_group(&"target")                 or _lock_target.global_position.distance_to(global_position) > lock_break_range:
-            _set_lock(null, "off")
-    var stick: Vector2 = Input.get_vector(&"camera_left", &"camera_right", &"camera_down", &"camera_up")
+## 每帧：目标死了、跑太远就自动解锁
+func _update_lock(_delta: float) -> void:
     if _lock_target == null:
-        _flick_active = false
         return
-    var mag: float = stick.length()
-    if not _flick_active:
-        if mag >= lock_flick_threshold:
-            _flick_active = true
-            _flick_timer = 0.0
-            _flick_dir = stick
-        return
-    _flick_timer += delta
-    if mag > _flick_dir.length():
-        _flick_dir = stick
-    if mag < 0.3:
-        _flick_active = false
-        # 推得快、松得快才是"拨"；推住超过 lock_flick_time 是在转镜头张望，不切换
-        if _flick_timer <= lock_flick_time:
-            _switch_lock(_flick_dir)
+    if not is_instance_valid(_lock_target) or not _lock_target.is_in_group(&"target")             or _lock_target.global_position.distance_to(global_position) > lock_break_range:
+        _set_lock(null, "off")
 
 
-## 按拨动方向在屏幕上找下一个目标：相对当前目标的屏幕位置，方向夹角在范围内、离得最近的
-func _switch_lock(flick: Vector2) -> void:
+## 按画面上的左右切换（不是世界坐标的左右）：玩家按的是"画面上更左边那只"。
+## side = -1 往左、+1 往右；选这一侧水平距离最近的，上下差得多的稍微靠后。那一侧没有就不动
+func _switch_lock(side: float) -> void:
     var cam: Camera3D = get_viewport().get_camera_3d()
     if cam == null or _lock_target == null:
         return
     var from: Vector2 = get_aim_screen_point()
     if not cam.is_position_behind(_lock_target.global_position):
         from = cam.unproject_position(_lock_target.global_position)
-    # 摇杆往上推是屏幕往上（屏幕 y 向下为正）
-    var want: Vector2 = Vector2(flick.x, -flick.y).normalized()
-    var max_angle: float = deg_to_rad(lock_switch_max_angle_deg)
     var best: Node3D = null
     var best_score: float = INF
     for node: Node in get_tree().get_nodes_in_group(&"target"):
@@ -947,12 +922,10 @@ func _switch_lock(flick: Vector2) -> void:
         if cam.is_position_behind(t.global_position):
             continue
         var v: Vector2 = cam.unproject_position(t.global_position) - from
-        if v.length() < 1.0:
+        var dx: float = v.x * side
+        if dx < 4.0:
             continue
-        var angle: float = absf(want.angle_to(v))
-        if angle > max_angle:
-            continue
-        var score: float = v.length() * (1.0 + angle)
+        var score: float = dx + absf(v.y) * 0.5
         if score < best_score:
             best_score = score
             best = t

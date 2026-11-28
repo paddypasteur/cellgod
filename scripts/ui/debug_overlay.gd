@@ -44,8 +44,8 @@ func _process(_delta: float) -> void:
         text += str(logger.call(&"get_summary")) + "\n"
     text += _enemies_text() + "\n"
     text += _joypad_text() + "\n\n"
-    text += "手柄: 左摇杆移动  LB/LT 升/降  右摇杆镜头  RT 轻击（连按出连段）  RB 重击  R3 锁定（拨右摇杆切换）  B 闪避（按住 LB/LT 可上下躲）  View 开关本面板\n"
-    text += "键鼠(临时): WASD 移动  空格/Shift 升/降  左键轻击  E 重击  Q/中键锁定  右键闪避  F1 开关本面板"
+    text += "手柄: 左摇杆移动  LB/LT 升/降  右摇杆镜头  RT 轻击（连按出连段）  RB 重击  R3 锁定（十字键←→切换）  B 闪避（按住 LB/LT 可上下躲）  View 开关本面板\n"
+    text += "键鼠(临时): WASD 移动  空格/Shift 升/降  左键轻击  E 重击  Q/中键锁定  Z/C 切换  右键闪避  F1 开关本面板"
     _label.text = text
 
 
