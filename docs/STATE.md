@@ -3,7 +3,24 @@
 > **所有者：开发 Claude。** 策划 Claude 只读，也可以直接读仓库代码；有出入时以代码为准。
 > 最后更新：2026-11-28
 
-## 最近一次改动（2026-11-28 第六批：刃末端不尖、身体为刃付出体积、边缘丝缕）
+## 最近一次改动（2026-11-28 第七批：判定跟着画面弯、拖尾、敌人受击"先脆后晃"）
+
+按策划 2026-11-28《判定跟着画面弯、粒子改真拖尾、敌人受击做成"先脆后晃"》做的。
+
+- **判定 = 画面上那把刀**：判定沿弯刃的中线分 5 段取样（每段一根胶囊），和着色器用同一套刃形公式（`_blade_point`）。
+  画面上的刃方向和长度不再用弹簧追判定，而是和判定完全一致（只有收刀时长度还有弹性）。
+  中线比刃口靠后半个刃宽，所以有误差也偏"晚"
+- **拖尾**：液滴和丝缕删了，换成"刀路过、粒子留在原地"：从刃后面那条薄边上生成，初速度上限 0.3 米/秒，0.35 秒淡掉。
+  颗粒 + 顺着刀路躺下的细丝两种，大小寿命随机。参数在"攻击动作（全细胞）"组的 `trail_*`
+- **敌人受击"先脆后晃"**：新的通用组件 `scripts/fx/hit_wobble.gd`（HitWobble 资源，Enemy 的 `hit_wobble`）：
+  1 定格期间完全不动 → 2 接触点凹进去 → 3 整条被推开、离接触点越远越跟不上（杆菌弯腰，圆的会压成碗状）→ 4 回弹约 2 次后停。
+  只往膜着色器写参数，不关心是哪种敌人，以后的敌人直接用
+  - 膜的流动改用脚本累加的游戏时间（`anim_time`），不再用着色器自带的 TIME——TIME 不受定格影响，定格时膜还在动就不"定"了
+  - 敌人的胶囊网格加了环数（沿长度 24 环），不然弯不出弧线
+  - 自检：`tests/hit_wobble_smoke.gd`（8 项：定格中形变严格为 0、定格后才开始、回弹不超过 3 次、接触点在敌人身边）；
+    `tests/hit_wobble_strip.gd` 出受击逐帧剪影 → `docs/img/hit_wobble_2026-11-28.png`
+
+## 上一批改动（2026-11-28 第六批：刃末端不尖、身体为刃付出体积、边缘丝缕）
 
 按策划 2026-11-28 两条（"是刀不是剑 + 一体感从本体找回来"和它的更正"末端不要尖，两侧都薄"）做的。
 
@@ -299,6 +316,7 @@
 - `tests/screenshot.gd`：窗口模式跑主场景，存待机、锁定、轻击前摇/挥扫/后摇、重击聚合/挥扫截图，开发 Claude 用来自查画面
 - `tests/lock_smoke.gd`：锁定的 19 项冒烟测试
 - `tests/silhouette_strip.gd` / `.py`：攻击动作逐帧剪影图
+- `tests/hit_wobble_smoke.gd`：敌人受击形变的 8 项测试；`tests/hit_wobble_strip.gd`：受击逐帧剪影
 - `tests/lock_stability.gd`：无界面跑 30 秒，统计目标切换和"乱跳"次数
 - `tests/dodge_smoke.gd`：闪避的 9 项冒烟测试
 - `tests/bounce_smoke.gd`：连招弹射的 8 项冒烟测试，可截图
@@ -320,6 +338,7 @@ HUD 视野外指示器、鼠标转镜头、ATP、质量系统、玩家死亡流�
 | `scripts/autoload/hit_stop.gd` | 全局命中定格 |
 | `scripts/autoload/sfx.gd` | 代码合成的占位音效 |
 | `scripts/fx/hit_tier.gd` / `scripts/fx/hit_fx.gd` | 打击档位参数 / 命中特效 |
+| `scripts/fx/hit_wobble.gd` | 受击形变"先脆后晃"（通用，挂在敌人上） |
 | `shaders/cell_membrane.gdshader` / `scripts/fx/cell_look.gd` | 细胞膜着色器 / 细胞观感参数（免疫族、细菌族） |
 | `scripts/debug/playtest_logger.gd` | 试玩记录器（arena.tscn 里的 PlaytestLogger 节点） |
 | `scripts/arena/drift_particles.gd` | 漂浮颗粒 |

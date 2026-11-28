@@ -266,15 +266,10 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 整团质量的弹簧：刚度越大跟得越紧；阻尼越小，收招后晃得越久
 @export var mass_stiffness: float = 160.0
 @export var mass_damping: float = 8.0
-## 刃方向的弹簧：追判定的方向。刀是硬的，所以跟得很紧、几乎不冲过头——
-## 过冲留给整团质量（身体还会晃），刃本身"末端硬停"（2026-11-28 策划：韧在速度曲线上，不在刀身上）
-@export var blade_angle_stiffness: float = 1200.0
-@export var blade_angle_damping: float = 55.0
+## 画面上的刃方向 = 判定方向，不再用弹簧追（2026-11-28 策划：判定和画面必须对得上，刀碰到了才掉血）
 ## 刃长度的弹簧
 @export var blade_length_stiffness: float = 380.0
 @export var blade_length_damping: float = 16.0
-## 起手时刃的起点比判定起点再往后多少度：蓄的那一下往后拉
-@export var blade_wind_back_deg: float = 25.0
 ## 挥扫的速度曲线：角度 = 进度 ^ 这个数。1 = 匀速；大于 1 = 起手慢、越挥越快、到头硬停。
 ## 那一下"唰"是加速度给的。判定和画面都按这条曲线走
 @export var swing_ease_power: float = 2.0
@@ -304,18 +299,21 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 身体整体缩小多少（半径比例）、刃根周围再凹进去多少（半径比例）。收回时按刃的长度鼓回来
 @export_range(0.0, 0.6) var body_shrink: float = 0.18
 @export_range(0.0, 0.8) var body_dent: float = 0.25
-## 边缘脱尾：挥动时从刃的两条薄边甩出、拖在挥击后面的丝缕。数量（同时存在的上限）、寿命（秒）
-@export var wisps_enabled: bool = true
-@export var wisp_amount: int = 60
-@export var wisp_lifetime: float = 0.3
 ## 胞质被带着走：挥击时膜纹顺挥击方向流动，挥完按这个速度散回乱流（每秒）
 @export var flow_align_decay: float = 2.5
 @export var flow_advect_speed: float = 5.0
 ## 核跟着整团质量走的程度（重心移动）
 @export var core_follow: float = 0.6
-## 挥动时从刃尖甩出的小液滴（大小、寿命、方向都是随机的）
-@export var droplets_enabled: bool = true
-@export var droplet_amount: int = 40
+## 拖尾（2026-11-28 开发者："应该是在它后面形成一种类似于拖尾的效果"）：
+## 不是刀"喷"出粒子，是刀"路过"、粒子留在原地慢慢淡掉，标出刀走过的路。从刃后面那条薄边上生成
+@export var trail_enabled: bool = true
+## 颗粒（小液滴）和丝缕（细长条）同时存在的上限
+@export var trail_mote_amount: int = 120
+@export var trail_strand_amount: int = 60
+## 留多久（秒）
+@export var trail_lifetime: float = 0.35
+## 生成时自己的初速度上限（米/秒）。要很小：大了就又变成"喷"
+@export var trail_max_speed: float = 0.3
 
 @export_group("锁定")
 ## R3 / Q / 鼠标中键 锁定或解锁；十字键 ← → （键盘 Z / C）切换到画面上左边 / 右边相邻的目标。
@@ -354,8 +352,14 @@ var _flow_advect: float = 0.0
 var _flow_dir: Vector3 = Vector3.RIGHT
 var _core: MeshInstance3D = null
 var _core_base: Vector3 = Vector3.ZERO
-var _droplets: CPUParticles3D = null
-var _wisps: CPUParticles3D = null
+var _trail_motes: CPUParticles3D = null
+var _trail_strands: CPUParticles3D = null
+## 膜的动画时间，按游戏时间累加（命中定格时停住）
+var _anim_time: float = 0.0
+var _blade_angle_prev: float = 0.0
+var _blade_len_prev: float = 0.0
+## 本次判定取样时，刃上离目标最近的点（世界坐标），交给目标做受击形变
+var _last_contact: Vector3 = Vector3.ZERO
 
 ## 锁定目标（null = 没锁）
 var _lock_target: Node3D = null
@@ -448,6 +452,8 @@ var _swing_side: float = 1.0
 ## 本次挥扫已经打中过的目标，避免同一个目标被一次挥扫判定多次
 var _swing_hit_ids: Array[int] = []
 
+## 判定沿弯刃分几段取样
+const HIT_SAMPLES: int = 5
 var _pod_capsule: CapsuleShape3D = CapsuleShape3D.new()
 var _pod_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
 
@@ -885,19 +891,27 @@ func _update_cell_motion(delta: float) -> void:
             attacking = true
             len_goal = _pod_length
     if attacking:
-        var ang_goal: float = lerpf(_swing_start, _swing_end, _swing_progress())
-        var acc: float = (ang_goal - _blade_angle) * blade_angle_stiffness - _blade_angle_vel * blade_angle_damping
-        _blade_angle_vel += acc * delta
-        _blade_angle += _blade_angle_vel * delta
+        # 画面上的刃方向就是判定方向（判定也沿这把弯刃取样），一点都不能差
+        var ang: float = lerpf(_swing_start, _swing_end, _swing_progress())
+        # 判定细分时已经把 _blade_angle 同步过了，速度要和上一帧末比
+        _blade_angle_vel = (ang - _blade_angle_prev) / delta
+        _blade_angle = ang
+        _blade_angle_prev = ang
         var follow: float = mass_follow_heavy if _attack_is_heavy else mass_follow_light
         mass_goal = _blade_dir() * follow * clampf(_blade_len / maxf(_target_length, 0.001), 0.0, 1.0)
-    var len_acc: float = (len_goal - _blade_len) * blade_length_stiffness - _blade_len_vel * blade_length_damping
-    _blade_len_vel += len_acc * delta
-    _blade_len = maxf(_blade_len + _blade_len_vel * delta, 0.0)
+    if attacking and _pod_state != PodState.RETRACTING:
+        # 伸出、挥、停住时长度也和判定完全一致；只有收回（不判定）时用弹簧，收得有弹性
+        _blade_len_vel = (len_goal - _blade_len_prev) / delta
+        _blade_len = len_goal
+    else:
+        var len_acc: float = (len_goal - _blade_len) * blade_length_stiffness - _blade_len_vel * blade_length_damping
+        _blade_len_vel += len_acc * delta
+        _blade_len = maxf(_blade_len + _blade_len_vel * delta, 0.0)
     if _blade_len <= 0.0 and _blade_len_vel < 0.0:
         # 收到底的那股冲劲交给整团质量：刃不是消失，是流回身体里晃一下
         _mass_vel += _blade_dir() * _blade_len_vel * 0.15
         _blade_len_vel = 0.0
+    _blade_len_prev = _blade_len
     var m_acc: Vector3 = (mass_goal - _mass) * mass_stiffness - _mass_vel * mass_damping
     _mass_vel += m_acc * delta
     _mass += _mass_vel * delta
@@ -911,8 +925,10 @@ func _update_cell_motion(delta: float) -> void:
         _flow_align *= exp(-flow_align_decay * delta)
     _flow_advect += _flow_align * flow_advect_speed * delta
 
-    var bend: float = -signf(_swing_end - _swing_start) * blade_curve
+    var bend: float = _blade_curve_now()
+    _anim_time += delta
     if _body_material != null:
+        _body_material.set_shader_parameter(&"anim_time", _anim_time)
         # Player 自身不旋转，身体网格的模型空间就是世界朝向
         var m_len: float = _mass.length()
         _body_material.set_shader_parameter(&"stretch_dir", _mass / m_len if m_len > 0.0001 else Vector3.FORWARD)
@@ -941,117 +957,118 @@ func _update_cell_motion(delta: float) -> void:
         var shrink_now: float = body_shrink * clampf(_blade_len / maxf(_target_length, 0.001), 0.0, 1.0)
         _core.scale = Vector3.ONE * (1.0 - shrink_now)
 
-    # 刃尖甩出的小液滴：只在甩得快的时候出，方向是刃尖的运动方向，散得很开
-    if _droplets != null:
-        var fast: bool = attacking and _blade_len > 0.4 and speed > 4.0
-        _droplets.emitting = droplets_enabled and fast
-        if fast:
-            var tip: Vector3 = (_blade_dir() * (body_radius + _blade_len)).rotated(_blade_axis, bend)
-            _droplets.global_position = global_position + tip
-            _droplets.direction = _flow_dir
-            _droplets.initial_velocity_max = 2.0 + speed * 0.25
-    # 丝缕：发射区是一条沿着刃的细长盒子，粒子留在世界里不跟着刃走，所以自然拖在挥击后面
-    if _wisps != null:
-        var sweeping: bool = attacking and _blade_len > 0.5 and speed > 3.0
-        _wisps.emitting = wisps_enabled and sweeping
-        if sweeping:
-            var mid_len: float = body_radius + _blade_len * 0.6
-            var along: Vector3 = _blade_dir().rotated(_blade_axis, bend * 0.4)
-            var side: Vector3 = _blade_axis.cross(along).normalized()
-            _wisps.global_transform = Transform3D(Basis(along, _blade_axis, side), global_position + along * mid_len)
-            _wisps.emission_box_extents = Vector3(_blade_len * 0.45, 0.02, blade_width * 0.5)
-            _wisps.direction = -_flow_dir
+    _update_trail(attacking, speed)
 
 
-## 画面上的刃当前指向（追判定的弹簧，不是判定本身）
+## 拖尾：发射点放在刃后面那条薄边上（随刃的弯曲），粒子几乎没有初速度，留在刃扫过的地方
+func _update_trail(attacking: bool, speed: float) -> void:
+    if _trail_motes == null:
+        return
+    var on: bool = trail_enabled and attacking and _blade_len > 0.4 and speed > 3.0
+    _trail_motes.emitting = on
+    _trail_strands.emitting = on
+    if not on:
+        return
+    var trailing: float = -signf(_blade_angle_vel)
+    var pts := PackedVector3Array()
+    for i: int in 12:
+        pts.append(_blade_point(lerpf(0.25, 0.95, i / 11.0), trailing))
+    var motion: Vector3 = _blade_axis.cross(_blade_dir()).normalized() * signf(_blade_angle_vel)
+    for ps: CPUParticles3D in [_trail_motes, _trail_strands]:
+        ps.global_transform = Transform3D(Basis.IDENTITY, global_position)
+        ps.emission_points = pts
+        # 丝缕要靠一点点速度来朝向（顺着刀走的方向躺下），所以给一个极小的、朝后的速度
+        ps.direction = -motion
+        ps.initial_velocity_max = trail_max_speed
+
+
+## 刃上一点（相对身体中心）：t = 0..1 沿刃长，edge = -1..1 横跨刃宽。和着色器里的刃形用同一套公式，
+## 判定取样和拖尾发射点都用它，保证三者是同一把刀
+func _blade_point(t: float, edge: float) -> Vector3:
+    var dir: Vector3 = _blade_dir()
+    var along: float = lerpf(body_radius * 0.35, body_radius + _blade_len, t)
+    var ew: Vector3 = _blade_axis.cross(dir).normalized()
+    var x: float = clampf((t - blade_tip_start) / (1.0 - blade_tip_start), 0.0, 1.0)
+    var w: float = lerpf(1.0, blade_keep_width, t / blade_tip_start) if t < blade_tip_start \
+            else blade_keep_width * lerpf(1.0, blade_end_width, smoothstep(0.0, 1.0, x))
+    var hw: float = 0.5 * blade_width * w * clampf(_blade_len, 0.3, 1.0)
+    var p: Vector3 = dir * along + ew * hw * edge
+    return p.rotated(_blade_axis, _blade_curve_now() * t * t)
+
+
+## 刀身的弯（弧度，末端处）：顺着挥击的弧往后弯
+func _blade_curve_now() -> float:
+    return -signf(_swing_end - _swing_start) * blade_curve
+
+
+## 画面上的刃当前指向（和判定一致）
 func _blade_dir() -> Vector3:
     return _blade_base.rotated(_blade_axis, _blade_angle)
 
 
-## 出手那一刻：刃从"判定起点再往后拉一点"开始追
+## 出手那一刻：画面上的刃从判定起点开始
 func _reset_blade_for_swing() -> void:
     _blade_base = _attack_dir
     _blade_axis = _swing_axis
-    _blade_angle = _swing_start + deg_to_rad(blade_wind_back_deg) * signf(_swing_start)
+    _blade_angle = _swing_start
+    _blade_angle_prev = _swing_start
     _blade_angle_vel = 0.0
 
 
-func _create_droplets() -> void:
-    _droplets = CPUParticles3D.new()
-    _droplets.name = "SwingDroplets"
-    var drop := SphereMesh.new()
-    drop.radius = 0.045
-    drop.height = 0.09
-    drop.radial_segments = 8
-    drop.rings = 4
+func _create_trail() -> void:
+    _trail_motes = _make_trail_particles("TrailMotes", trail_mote_amount, false)
+    _trail_strands = _make_trail_particles("TrailStrands", trail_strand_amount, true)
+
+
+## 大小、寿命都散开，淡出；颗粒是小圆点，丝缕是顺着刀走的方向躺下的细长条
+func _make_trail_particles(node_name: String, amount: int, strands: bool) -> CPUParticles3D:
+    var ps := CPUParticles3D.new()
+    ps.name = node_name
     var m := StandardMaterial3D.new()
-    m.albedo_color = Color(look.membrane_color.lightened(0.3), 0.85)
+    m.albedo_color = look.membrane_color.lightened(0.4)
+    m.vertex_color_use_as_albedo = true
     m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-    m.emission_enabled = true
-    m.emission = look.rim_color * 0.4
-    drop.material = m
-    _droplets.mesh = drop
-    _droplets.amount = droplet_amount
-    _droplets.lifetime = 0.45
-    _droplets.lifetime_randomness = 0.7
-    _droplets.local_coords = false
-    _droplets.emitting = false
-    _droplets.randomness = 1.0
-    _droplets.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-    _droplets.emission_sphere_radius = 0.15
-    _droplets.spread = 55.0
-    _droplets.initial_velocity_min = 1.0
-    _droplets.initial_velocity_max = 5.0
-    _droplets.gravity = Vector3(0.0, -1.5, 0.0)
-    _droplets.damping_min = 2.0
-    _droplets.damping_max = 6.0
-    # 大小差得开：有大滴有碎沫，不要整齐划一
-    _droplets.scale_amount_min = 0.25
-    _droplets.scale_amount_max = 1.6
-    var shrink := Curve.new()
-    shrink.add_point(Vector2(0.0, 1.0))
-    shrink.add_point(Vector2(1.0, 0.0))
-    _droplets.scale_amount_curve = shrink
-    _droplets.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-    add_child(_droplets)
-    _droplets.top_level = true
-    # 丝缕：很细的长条，顺着自己的速度方向拉长；长短、粗细、寿命都散开，不要一排整齐的飘带
-    _wisps = CPUParticles3D.new()
-    _wisps.name = "EdgeWisps"
-    var strand := CylinderMesh.new()
-    strand.top_radius = 0.008
-    strand.bottom_radius = 0.018
-    strand.height = 0.35
-    strand.radial_segments = 4
-    strand.rings = 1
-    var wm := StandardMaterial3D.new()
-    wm.albedo_color = Color(look.membrane_color.lightened(0.4), 0.6)
-    wm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-    wm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-    strand.material = wm
-    _wisps.mesh = strand
-    _wisps.amount = wisp_amount
-    _wisps.lifetime = wisp_lifetime
-    _wisps.lifetime_randomness = 0.6
-    _wisps.local_coords = false
-    _wisps.emitting = false
-    _wisps.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
-    _wisps.particle_flag_align_y = true
-    _wisps.spread = 25.0
-    _wisps.initial_velocity_min = 0.3
-    _wisps.initial_velocity_max = 1.5
-    _wisps.gravity = Vector3.ZERO
-    _wisps.damping_min = 1.0
-    _wisps.damping_max = 3.0
-    _wisps.scale_amount_min = 0.4
-    _wisps.scale_amount_max = 1.5
-    var fade := Curve.new()
-    fade.add_point(Vector2(0.0, 1.0))
-    fade.add_point(Vector2(1.0, 0.2))
-    _wisps.scale_amount_curve = fade
-    _wisps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-    add_child(_wisps)
-    _wisps.top_level = true
+    m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    if strands:
+        var strand := CylinderMesh.new()
+        strand.top_radius = 0.006
+        strand.bottom_radius = 0.014
+        strand.height = 0.3
+        strand.radial_segments = 4
+        strand.rings = 1
+        strand.material = m
+        ps.mesh = strand
+        ps.particle_flag_align_y = true
+    else:
+        var mote := SphereMesh.new()
+        mote.radius = 0.035
+        mote.height = 0.07
+        mote.radial_segments = 6
+        mote.rings = 3
+        mote.material = m
+        ps.mesh = mote
+    ps.amount = amount
+    ps.lifetime = trail_lifetime
+    ps.lifetime_randomness = 0.6
+    ps.local_coords = false
+    ps.emitting = false
+    ps.emission_shape = CPUParticles3D.EMISSION_SHAPE_POINTS
+    ps.spread = 20.0
+    ps.initial_velocity_min = 0.0
+    ps.initial_velocity_max = trail_max_speed
+    ps.gravity = Vector3.ZERO
+    ps.damping_min = 0.5
+    ps.damping_max = 2.0
+    ps.scale_amount_min = 0.4
+    ps.scale_amount_max = 1.6
+    var fade := Gradient.new()
+    fade.set_color(0, Color(1.0, 1.0, 1.0, 0.8))
+    fade.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+    ps.color_ramp = fade
+    ps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+    add_child(ps)
+    ps.top_level = true
+    return ps
 
 
 # ---------------------------------------------------------------- 锁定
@@ -1234,7 +1251,9 @@ func _deal_hit(target: Object, direction: Vector3) -> void:
     if target == null:
         return
     if target.has_method(&"take_hit"):
-        target.call(&"take_hit", _attack_strength, direction)
+        # 接触点 + 冲击方向（刃的运动方向）给目标做"先脆后晃"的受击形变
+        var impulse: Vector3 = _swing_axis.cross(_pod_dir()).normalized() * signf(_swing_end - _swing_start)
+        target.call(&"take_hit", _attack_strength, direction, _last_contact, impulse)
     if target is Node:
         hit_landed.emit(target, _attack_strength)
     var first_hit_of_attack: bool = not _attack_hit_any
@@ -1304,7 +1323,7 @@ func _apply_look() -> void:
     _body_mesh.add_child(core)
     _core = core
     _core_base = core.position
-    _create_droplets()
+    _create_trail()
 
 
 ## 五档里没在检查器里配的，填上默认值。轻击压在最低档；受击比以前（定格 0.06、抖 0.6）往上调了一点
@@ -1365,27 +1384,47 @@ func _sweep_swing_to(to_t: float) -> bool:
     return false
 
 
-## 用一根胶囊体覆盖整条伪足做重叠检测：挥扫时打中的可能是伪足中段，不只是尖端
+## 判定沿画面上那把弯刃取样（2026-11-28 策划：判定跟着画面走，不是反过来）：
+## 沿刃的中线分几段，每段一根胶囊。中线比刃口靠后半个刃宽，所以有误差也是偏"晚"——
+## 刀碰到之后才扣血读起来是实的，碰到之前扣血读起来是坏的
 func _check_pod_overlap() -> bool:
-    var dir: Vector3 = _pod_dir()
-    var total: float = body_radius + _pod_length
-    _pod_capsule.radius = pod_tip_radius
-    _pod_capsule.height = maxf(total, pod_tip_radius * 2.0)
-    _pod_query.collision_mask = hit_mask
-    _pod_query.transform = Transform3D(_basis_y_to(dir), global_position + dir * total * 0.5)
+    _sync_blade_to_swing()
     var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
+    _pod_query.collision_mask = hit_mask
+    _pod_capsule.radius = pod_tip_radius
     var hit_any: bool = false
-    for result: Dictionary in space.intersect_shape(_pod_query, 8):
-        var target: Object = result.get("collider")
-        if target == null:
-            continue
-        var id: int = target.get_instance_id()
-        if _swing_hit_ids.has(id):
-            continue
-        _swing_hit_ids.append(id)
-        _deal_hit(target, dir)
-        hit_any = true
+    var prev: Vector3 = _blade_point(0.0, 0.0)
+    for i: int in range(1, HIT_SAMPLES + 1):
+        var cur: Vector3 = _blade_point(float(i) / HIT_SAMPLES, 0.0)
+        var seg: Vector3 = cur - prev
+        var seg_len: float = seg.length()
+        if seg_len > 0.001:
+            _pod_capsule.height = seg_len + pod_tip_radius * 2.0
+            _pod_query.transform = Transform3D(_basis_y_to(seg), global_position + (prev + cur) * 0.5)
+            for result: Dictionary in space.intersect_shape(_pod_query, 8):
+                var target: Object = result.get("collider")
+                if target == null:
+                    continue
+                var id: int = target.get_instance_id()
+                if _swing_hit_ids.has(id):
+                    continue
+                _swing_hit_ids.append(id)
+                var a: Vector3 = global_position + prev
+                var c: Vector3 = (target as Node3D).global_position if target is Node3D else a
+                _last_contact = Geometry3D.get_closest_point_to_segment(c, a, global_position + cur)
+                _deal_hit(target, _pod_dir())
+                hit_any = true
+        prev = cur
     return hit_any
+
+
+## 判定在一帧里会细分成好几小步，每一步都要让刃的画面状态（方向、长度）跟上，取样才是这一步的刃
+func _sync_blade_to_swing() -> void:
+    _blade_base = _attack_dir
+    _blade_axis = _swing_axis
+    _blade_angle = lerpf(_swing_start, _swing_end, _swing_progress())
+    if _pod_state != PodState.RETRACTING:
+        _blade_len = _pod_length
 
 
 # ---------------------------------------------------------------- 移动

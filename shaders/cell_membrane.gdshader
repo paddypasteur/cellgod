@@ -29,6 +29,16 @@ uniform vec3 flow_dir = vec3(1.0, 0.0, 0.0);
 uniform float flow_align : hint_range(0.0, 1.0) = 0.0;
 uniform float flow_advect = 0.0;
 uniform float flow_align_amp_boost = 2.5;
+// 动画时间（秒），由脚本按游戏时间累加。不用 TIME：TIME 不受命中定格影响，
+// 定格时膜还在流动，"定住"那一下就不脆了（DESIGN《受击形变：先脆后晃》第 1 段：纹丝不动）
+uniform float anim_time = 0.0;
+// 受击形变（HitWobble 写入，模型空间）：接触点、冲击方向、凹陷深度与范围、整体被推开的量与衰减距离
+uniform vec3 hit_pos = vec3(0.0);
+uniform vec3 hit_dir = vec3(0.0, 0.0, -1.0);
+uniform float hit_dent = 0.0;
+uniform float hit_dent_radius = 0.4;
+uniform float hit_bend = 0.0;
+uniform float hit_bend_falloff = 0.6;
 // 0 = 软膜；1 = 聚合成刃（不起伏、不透明、高光更锐）
 uniform float hardness : hint_range(0.0, 1.0) = 0.0;
 // 质量偏移（模型空间方向 × 量）：这一侧鼓出去、背面凹进来。0 = 不变形
@@ -134,7 +144,7 @@ void vertex() {
     float hard_local = max(hardness, v_blade * pod_hardness);
 
     // 胞质流动：挥击时顺着 flow_dir 拉成条纹并被带着走，幅度变大
-    float t = TIME * flow_speed * (1.0 + flow_align * 2.0);
+    float t = anim_time * flow_speed * (1.0 + flow_align * 2.0);
     vec3 q = rest - flow_dir * dot(rest, flow_dir) * flow_align * 0.8 - flow_dir * flow_advect;
     // 两层不同频率叠加，避免一眼看出是规则的正弦波
     float w = wobble(q, t) + 0.5 * wobble(q * 2.1 + vec3(1.7, 0.3, 2.9), t * 1.6);
@@ -146,6 +156,17 @@ void vertex() {
     float front = max(d, 0.0);
     float back = max(-d, 0.0);
     p += stretch_dir * (front * front - back * stretch_back_ratio) * stretch_amount * r;
+
+    // 受击：接触点凹进去；整条被推开，离接触点越远越跟不上 → 绕命中点弓起。
+    // 弯的衰减只按"垂直于冲击方向"的距离算：同一截身体（沿冲击方向的整个厚度）一起移动，所以是弯，不是被挤扁。
+    // 杆状的敌人因此弯腰；圆的敌人中间被推得多、边缘少 → 压成碗状。同一条规则，形状不同反应自然不同
+    if (hit_dent > 0.0001 || abs(hit_bend) > 0.0001) {
+        vec3 dv = rest - hit_pos;
+        float d2 = dot(dv, dv);
+        p += hit_dir * hit_dent * exp(-d2 / (hit_dent_radius * hit_dent_radius));
+        vec3 dp = dv - hit_dir * dot(dv, hit_dir);
+        p += hit_dir * hit_bend * exp(-dot(dp, dp) / (hit_bend_falloff * hit_bend_falloff));
+    }
 
     VERTEX = p;
     NORMAL = n;

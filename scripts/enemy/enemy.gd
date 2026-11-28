@@ -71,6 +71,8 @@ const STATE_LABELS: PackedStringArray = ["接近", "前摇", "攻击", "硬直",
 ## 细胞观感（细菌族配色：暖色、病态，膜起伏更快更碎）。为空时用默认值。
 ## 下面的状态颜色是染在膜上的
 @export var look: CellLook
+## 受击形变"先脆后晃"（通用组件，每只敌人一份）。为空时用默认值
+@export var hit_wobble: HitWobble
 ## 前摇结束时膨胀到多大
 @export var windup_swell: float = 1.35
 ## 前摇结束时边缘高光增强到几倍：膨胀 + 变色 + 发亮，起手一眼可读
@@ -112,6 +114,7 @@ var _material: ShaderMaterial = null
 
 @onready var _visual: Node3D = $Visual
 @onready var _mesh: MeshInstance3D = $Visual/Mesh
+var _anim_time: float = 0.0
 @onready var _label: Label3D = $StateLabel
 @onready var _collision: CollisionShape3D = $CollisionShape3D
 
@@ -124,6 +127,7 @@ func _ready() -> void:
     _spawn_position = global_position
     _orbit_sign = 1.0 if randf() < 0.5 else -1.0
     _cooldown = randf_range(attack_cooldown_min, attack_cooldown_max)
+    hit_wobble = hit_wobble.duplicate() if hit_wobble != null else HitWobble.new()
     _apply_look()
     _find_player()
 
@@ -147,6 +151,11 @@ func is_threatening() -> bool:
 
 
 func _physics_process(delta: float) -> void:
+    # 膜的动画时间按游戏时间走：命中定格时一起停住
+    _anim_time += delta
+    _material.set_shader_parameter(&"anim_time", _anim_time)
+    var hit_stop: Node = get_node_or_null(^"/root/HitStop")
+    hit_wobble.update(delta, _material, hit_stop != null and hit_stop.call(&"is_active"))
     if _player == null:
         _find_player()
         if _player == null:
@@ -299,9 +308,13 @@ func _apply_arena_bounds() -> void:
 
 
 ## 玩家伪足命中时调用（和靶子同一个接口）
-func take_hit(strength: float, direction: Vector3) -> void:
+## contact = 接触点（世界坐标），impulse = 冲击方向（刃的运动方向）；不给时按 direction 从正面打
+func take_hit(strength: float, direction: Vector3, contact: Vector3 = Vector3.INF, impulse: Vector3 = Vector3.ZERO) -> void:
     if _state == State.DEAD:
         return
+    var push: Vector3 = impulse if impulse.length_squared() > 0.0001 else direction
+    var point: Vector3 = contact if contact.is_finite() else global_position - direction.normalized()
+    hit_wobble.hit(_mesh, point, push.normalized(), strength)
     health -= lerpf(damage_from_light, damage_from_heavy, strength)
     _flash_timer = hurt_flash_time
     if health <= 0.0:
@@ -324,6 +337,12 @@ func _apply_look() -> void:
     _material = look.make_membrane_material()
     _mesh.material_override = _material
     var body := _mesh.mesh as CapsuleMesh
+    if body != null:
+        # 受击时整条要能弯：沿长度需要足够多的环，默认的环数弯不出弧线
+        body = body.duplicate()
+        body.rings = 24
+        body.radial_segments = 32
+        _mesh.mesh = body
     var core_mesh := CapsuleMesh.new()
     var r: float = (body.radius if body != null else 0.45) * look.core_scale
     core_mesh.radius = r
