@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="290" viewBox="0 0 680 290">
+<rect width="680" height="290" fill="#ffffff"/>
+<text x="310" y="30" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">侧面轮廓</text>
+<text x="600" y="30" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">横截面</text>
+<circle cx="132" cy="90" r="20" fill="#888780"/>
+<path d="M150,74 L385,72 L470,90 L385,108 L150,106 Z" fill="#888780"/>
+<ellipse cx="600" cy="90" rx="28" ry="6" fill="#888780"/>
+<text x="36" y="84" font-size="14" fill="#2C2C2A" font-family="sans-serif">现在</text>
+<text x="36" y="102" font-size="12" fill="#5F5E5A" font-family="sans-serif">剑（对称）</text>
+<text x="600" y="118" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">对称，尖在中线</text>
+<circle cx="132" cy="230" r="20" fill="#1D9E75"/>
+<path d="M150,214 C280,200 390,186 468,172 C420,196 300,228 150,246 Z" fill="#1D9E75"/>
+<path d="M574,230 C582,221 618,221 626,230 L600,243 Z" fill="#1D9E75"/>
+<text x="36" y="224" font-size="14" fill="#2C2C2A" font-family="sans-serif">要的</text>
+<text x="36" y="242" font-size="12" fill="#5F5E5A" font-family="sans-serif">刀（单刃）</text>
+<text x="600" y="212" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">刀背：厚</text>
+<text x="600" y="262" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">刀刃：薄，在一侧</text>
+</svg>
