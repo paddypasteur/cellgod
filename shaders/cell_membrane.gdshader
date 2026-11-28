@@ -41,16 +41,19 @@ uniform float stretch_back_ratio = 0.35;
 // 方向、伸出长度（米，从膜表面算）
 uniform vec3 pod_dir = vec3(0.0, 0.0, -1.0);
 uniform float pod_len = 0.0;
-// 挥动所绕的轴：刃在垂直于这根轴的平面里挥，所以沿这根轴压扁（刃是扁的，刃口朝运动方向）
+// 挥动所绕的轴：刃在垂直于这根轴的平面里挥
 uniform vec3 pod_axis = vec3(0.0, 1.0, 0.0);
-// 尖端相对根部被甩在后面的角度（弧度，正负表示方向），越往外弯得越多
-uniform float pod_bend = 0.0;
+// 刃沿长度各处相对根部的弯折角（弧度）：0 = 根部，4 = 尖端，中间线性插值。
+// 由脚本里一串越往尖端越软的弹簧算出——尖端跟不上根部、整片向后弓、到头再抽回来，这就是韧劲
+uniform float pod_bend_curve[5];
 // 根部有多宽：膜上离出手方向多少度以内的部分会被拉出去（存余弦）。越小根部越宽、和身体越连成一片
 uniform float pod_root_cos = 0.55;
-// 越往外越细：尖端的粗细相对根部
-uniform float pod_thin : hint_range(0.0, 1.0) = 0.25;
-// 沿挥动轴压扁的程度（1 = 压成薄片）
-uniform float pod_flat : hint_range(0.0, 1.0) = 0.75;
+// 横截面（2026-11-28 开发者："还是一个柱形……要自然而然地过渡成偏片状的"）：
+// 在挥击平面内铺开（宽度倍数）、垂直于挥击平面压扁（厚度倍数）。根部 = 身体是圆的，往外逐渐过渡，尖端最扁
+uniform float pod_width = 1.6;
+uniform float pod_thickness : hint_range(0.02, 1.0) = 0.15;
+// 刃尖收尖：没有这一项时，刃的末端还是原来那个球的球冠，圆头，剪影像香肠
+uniform float pod_tip_sharp : hint_range(0.0, 1.0) = 0.85;
 // 伸出长度沿突起的分布：大于 1 时质量集中在根部，尖端拉得更细长
 uniform float pod_profile = 1.4;
 // 刃的部分硬化（不透明、少起伏）
@@ -83,12 +86,16 @@ void vertex() {
     if (pod_len > 0.001) {
         s = smoothstep(pod_root_cos, 1.0, dot(u, pod_dir));
         vec3 lat = rest - pod_dir * dot(rest, pod_dir);
-        lat -= pod_axis * dot(lat, pod_axis) * pod_flat * s;
-        lat *= mix(1.0, pod_thin, s);
+        float out_of_plane = dot(lat, pod_axis);
+        vec3 in_plane = lat - pod_axis * out_of_plane;
+        lat = in_plane * mix(1.0, pod_width, s) + pod_axis * out_of_plane * mix(1.0, pod_thickness, s);
+        lat *= 1.0 - pod_tip_sharp * s * s * s;
         float ext = pod_len * pow(s, pod_profile);
         p = pod_dir * (dot(rest, pod_dir) + ext) + lat;
-        // 越往外被甩得越靠后：整根弯成弧，前缘是凸的
-        float ang = pod_bend * ext / pod_len;
+        // 沿长度查弯折角：越往外弯得越多，弯成弧
+        float f = clamp(ext / pod_len, 0.0, 1.0) * 4.0;
+        int i0 = int(min(floor(f), 3.0));
+        float ang = mix(pod_bend_curve[i0], pod_bend_curve[i0 + 1], f - float(i0));
         p = rotate_axis(p, pod_axis, ang);
         // 法线近似：突起侧面朝外，尖端朝前
         vec3 side = lat + pod_dir * 0.15 * r;

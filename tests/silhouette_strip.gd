@@ -1,6 +1,6 @@
 extends SceneTree
 ## 逐帧剪影（DESIGN《攻击动作 = 全细胞惯性》的自检方法）：
-## 只放一个主角，透明背景，轻击、重击各拍 16 帧，俯视和身后两个角度。
+## 只放一个主角，透明背景，轻击、重击各拍 16 帧，俯视和玩家视角（游戏里的默认镜头）两个角度。
 ## 存出带透明通道的单帧 PNG，再由 tests/silhouette_strip.py 拼成纯色剪影条。
 ## 用法（窗口模式，会弹窗十来秒）：
 ##   godot --path . --resolution 400x400 -s tests/silhouette_strip.gd -- --out=输出目录
@@ -41,10 +41,13 @@ func _initialize() -> void:
     _vp.add_child(_p)
     # 攻击的上下角度平时跟镜头俯仰走；俯视镜头会让它朝正下方打，剪影就不是游戏里的样子了
     _p.vertical_from_camera = false
+    for arg: String in OS.get_cmdline_user_args():
+        if arg.begins_with("--preset="):
+            _p.whip_preset = arg.trim_prefix("--preset=")
     # 重击的扇形预告是半透明的辅助图形，不属于细胞本身，剪影里不要它
     _p.show_reach_preview = false
     var t: int = 60
-    for view: String in ["top", "back"]:
+    for view: String in ["top", "game"]:
         for kind: String in ["light", "heavy"]:
             _plan.append([view, kind, t])
             t += FRAMES * (LIGHT_STEP if kind == "light" else HEAVY_STEP) + SETTLE
@@ -57,11 +60,18 @@ func _set_view(view: String) -> void:
         _cam.position = Vector3(0.0, 15.0, -1.5)
         _cam.look_at(Vector3(0.0, 0.0, -1.5), Vector3.FORWARD)
     else:
-        # 和游戏里默认镜头差不多：身后、略高，往前看
+        # 玩家视角：按 arena.tscn 里 FollowCamera 的运行时默认值摆（俯角 35°、距离 7 米、注视点高 0.8 米、肩后偏移）。
+        # 2026-11-28 策划指出：以前"身后"那行俯角只有 14°，和玩家看到的不是一回事。合格与否以这一行为准
+        var arena: Node = (load("res://scenes/arena.tscn") as PackedScene).instantiate()
+        var fc: FollowCamera = arena.get_node("FollowCamera")
+        var pitch: float = deg_to_rad(fc.pitch_deg)
+        var orbit := Basis(Vector3.RIGHT, pitch)
+        var look := Vector3.UP * fc.look_height_offset + orbit.x * fc.shoulder_offset
         _cam.projection = Camera3D.PROJECTION_PERSPECTIVE
-        _cam.fov = 75.0
-        _cam.position = Vector3(0.0, 2.6, 7.0)
-        _cam.look_at(Vector3(0.0, 0.8, 0.0), Vector3.UP)
+        _cam.fov = fc.fov
+        _cam.position = look + orbit * Vector3(0.0, 0.0, fc.distance)
+        _cam.look_at(look, Vector3.UP)
+        arena.free()
 
 
 func _physics_process(_delta: float) -> bool:

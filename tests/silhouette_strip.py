@@ -7,7 +7,8 @@ import sys
 
 from PIL import Image, ImageDraw
 
-ROWS = [("top", "light"), ("top", "heavy"), ("back", "light"), ("back", "heavy")]
+# 玩家视角放前两行：合格与否以它为准，俯视只是参考
+ROWS = [("game", "light"), ("game", "heavy"), ("top", "light"), ("top", "heavy")]
 FRAMES = 16
 CELL = 160  # 每帧缩到多大（像素）
 THRESHOLD = 20

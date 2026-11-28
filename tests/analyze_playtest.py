@@ -164,7 +164,7 @@ def main() -> None:
                     print(f"      命中率 轻击 {rate('L')}，重击 {rate('H')}；"
                           f"连段长度（打了几段）{dict(sorted(combos.items()))}")
         if any(r.get("preset") for r in rows):
-            segment_report("打击感 A/B", "preset", ["A", "B"], {"A": "A 原来", "B": "B 新"})
+            segment_report("刃的韧劲 A/B", "preset", ["A", "B"], {"A": "A 软", "B": "B 硬"})
         segment_report("有无弹射（底盘自己站不站得住）", "bounce", ["0", "1"], {"0": "弹射关", "1": "弹射开"})
 
     hurt = events("hurt")
@@ -186,18 +186,59 @@ def main() -> None:
         print(f"玩家高度：{min(ys):.1f} ~ {max(ys):.1f} 米；"
               f"每 0.5 秒里有上下移动（>0.5 米）的占 {100 * moving / len(moves):.0f}%")
 
-    # 2026-11-28 起：锁定（lock 事件；sample 的 info=L 表示当时锁着；hurt 的 info=locked 表示挨打时锁着）
-    locks = events("lock")
-    if locks:
-        samples = events("sample")
-        locked_samples = sum(r["info"] == "L" for r in samples)
-        kinds = Counter(r["info"] for r in locks)
-        hurt_locked = [r for r in hurt if r["info"] == "locked"]
-        print(f"锁定：锁上 {kinds.get('on', 0)} 次，切换 {kinds.get('switch', 0)} 次，"
-              f"锁着的时间占 {100 * locked_samples / max(len(samples), 1):.0f}%；"
-              f"受击 {len(hurt)} 次里锁着时 {len(hurt_locked)} 次，"
-              f"攻击者起手位置 {dict(Counter(layer(r['rel_y']) for r in hurt_locked))}")
+    if ys:
+        print(f"玩家高度中位数 {statistics.median(ys):.1f} 米（球心 = 0；用来验证「敌人多从上方起手」是不是因为玩家爱待在下半球）")
 
+    # ---- 锁定（2026-11-28 起：lock 事件 on/off/switch）
+    locks = events("lock")
+    if not locks:
+        return
+    end_t = max(float(r["t"]) for r in rows)
+    intervals = []
+    start = None
+    for r in locks:
+        t = float(r["t"])
+        if r["info"] == "on" and start is None:
+            start = t
+        elif r["info"] == "off" and start is not None:
+            intervals.append((start, t))
+            start = None
+    if start is not None:
+        intervals.append((start, end_t))
+    locked = lambda t: any(a <= t <= b for a, b in intervals)
+    t_locked = sum(b - a for a, b in intervals)
+    t_free = end_t - t_locked
+    kinds = Counter(r["info"] for r in locks)
+    durs = sorted(b - a for a, b in intervals)
+    print("—— 锁定 ——")
+    print(f"  锁上 {kinds.get('on', 0)} 次，切换 {kinds.get('switch', 0)} 次，锁着 {t_locked:.0f} 秒（{100 * t_locked / end_t:.0f}%）；"
+          f"每次锁定时长中位数 {statistics.median(durs):.1f} 秒")
+    for name, sel, secs in [("锁着", locked, t_locked), ("没锁", lambda t: not locked(t), t_free)]:
+        if secs < 1:
+            continue
+        sub_hurt = [r for r in hurt if sel(float(r["t"]))]
+        sub_wind = [r for r in windup if sel(float(r["t"]))]
+        sub_dodge = [r for r in dodges if sel(float(r["t"]))]
+        on_scr = sum(r["on_screen"] == "1" for r in sub_wind)
+        print(f"  [{name}] {secs:.0f} 秒：受击 {60 * len(sub_hurt) / secs:.1f} 次/分钟（来源 {dict(Counter(layer(r['rel_y']) for r in sub_hurt))}），"
+              f"闪避 {60 * len(sub_dodge) / secs:.1f} 次/分钟，敌人起手在屏幕内 {on_scr}/{len(sub_wind)}")
+    # 锁定开始前 3 秒的受击率：分清"打不过才锁"（锁前就在挨打 = 选择效应）和"锁上才挨打"（锁定的锅）
+    ons = [float(r["t"]) for r in locks if r["info"] == "on"]
+    pre = sum(sum(t - 3.0 <= float(h["t"]) < t for h in hurt) for t in ons)
+    pre_secs = 3.0 * len(ons)
+    if pre_secs > 0 and t_free > 0:
+        free_rate = 60 * sum(not locked(float(h["t"])) for h in hurt) / t_free
+        print(f"  锁定开始前 3 秒的受击率 {60 * pre / pre_secs:.1f} 次/分钟（{pre} 次 / {len(ons)} 次锁定），"
+              f"对比没锁时平均 {free_rate:.1f}：明显更高 = 打不过才锁（选择效应）；接近 = 锁上之后才开始挨打")
+
+    # 推翻条件的口径（DESIGN《核心命题》2026-11-28 补丁）：三局阈值只统计没有锁定的时间段，
+    # 因为锁定本身压制垂直，不剔除的话会被一个和球形无关的原因拉低
+    free_dodges = [r for r in dodges if not locked(float(r["t"]))]
+    free_ys = [float(r["y"]) for r in events("sample") if not locked(float(r["t"]))]
+    if free_dodges and len(free_ys) > 1:
+        moves = [abs(a - b) for a, b in zip(free_ys, free_ys[1:])]
+        moving = 100 * sum(m > 0.5 for m in moves) / len(moves)
+        print(f"  推翻条件口径（只算没锁的时间）：闪避 {dodge_line(free_dodges)}；上下移动采样 {moving:.0f}%")
 
 if __name__ == "__main__":
     main()
