@@ -41,9 +41,6 @@ func _initialize() -> void:
     _vp.add_child(_p)
     # 攻击的上下角度平时跟镜头俯仰走；俯视镜头会让它朝正下方打，剪影就不是游戏里的样子了
     _p.vertical_from_camera = false
-    for arg: String in OS.get_cmdline_user_args():
-        if arg.begins_with("--preset="):
-            _p.whip_preset = arg.trim_prefix("--preset=")
     # 重击的扇形预告是半透明的辅助图形，不属于细胞本身，剪影里不要它
     _p.show_reach_preview = false
     var t: int = 60

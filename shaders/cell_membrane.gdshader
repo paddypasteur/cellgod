@@ -37,25 +37,27 @@ uniform float stretch_amount = 0.0;
 // 背面凹陷相对正面鼓出的比例
 uniform float stretch_back_ratio = 0.35;
 
-// —— 刃：从膜上拉出去的舌状突起（模型空间）——
+// —— 刃：膜上朝出手方向的一片被拉成一把刀（模型空间）——
+// 2026-11-28 开发者："本质还是圆锥""特别规则的圆锥""要尽可能去模仿正常的那种冷兵器的样子"。
+// 所以刃的形状不再从球面"拉长"出来（那样宽度沿长度匀速变小 = 圆锥），而是直接按刀的轮廓摆顶点：
+// 大部分长度几乎等宽、最后一段收尖；截面是扁的透镜形（宽在挥击平面内）；根部一小段从身体平滑过渡
 // 方向、伸出长度（米，从膜表面算）
 uniform vec3 pod_dir = vec3(0.0, 0.0, -1.0);
 uniform float pod_len = 0.0;
-// 挥动所绕的轴：刃在垂直于这根轴的平面里挥
+// 挥动所绕的轴：刃在垂直于这根轴的平面里挥，刃宽躺在这个平面里
 uniform vec3 pod_axis = vec3(0.0, 1.0, 0.0);
-// 刃沿长度各处相对根部的弯折角（弧度）：0 = 根部，4 = 尖端，中间线性插值。
-// 由脚本里一串越往尖端越软的弹簧算出——尖端跟不上根部、整片向后弓、到头再抽回来，这就是韧劲
-uniform float pod_bend_curve[5];
-// 根部有多宽：膜上离出手方向多少度以内的部分会被拉出去（存余弦）。越小根部越宽、和身体越连成一片
-uniform float pod_root_cos = 0.55;
-// 横截面（2026-11-28 开发者："还是一个柱形……要自然而然地过渡成偏片状的"）：
-// 在挥击平面内铺开（宽度倍数）、垂直于挥击平面压扁（厚度倍数）。根部 = 身体是圆的，往外逐渐过渡，尖端最扁
-uniform float pod_width = 1.6;
-uniform float pod_thickness : hint_range(0.02, 1.0) = 0.15;
-// 刃尖收尖：没有这一项时，刃的末端还是原来那个球的球冠，圆头，剪影像香肠
-uniform float pod_tip_sharp : hint_range(0.0, 1.0) = 0.85;
-// 伸出长度沿突起的分布：大于 1 时质量集中在根部，尖端拉得更细长
-uniform float pod_profile = 1.4;
+// 刀身单向的轻微弯曲（弧度，刃尖处）
+uniform float pod_curve = 0.0;
+// 膜上离出手方向多少度以内的部分变成刃（存余弦）
+uniform float pod_root_cos = 0.3;
+// 刃宽（米）、截面厚度 / 宽度
+uniform float pod_width = 0.5;
+uniform float pod_thickness_ratio = 0.15;
+// 从全长的多少开始收尖；收尖之前宽度只收窄到多少
+uniform float pod_tip_start = 0.78;
+uniform float pod_keep_width = 0.9;
+// 根部从身体过渡到刃的那一段占全长多少
+uniform float pod_root_blend = 0.15;
 // 刃的部分硬化（不透明、少起伏）
 uniform float pod_hardness : hint_range(0.0, 1.0) = 0.8;
 
@@ -81,25 +83,34 @@ void vertex() {
     vec3 n = NORMAL;
     vec3 p = rest;
 
-    // 刃：膜上朝出手方向的那一片被拉出去。s = 0 在根部边缘、1 在正中（尖端）
+    // 刃：t = 0 在根部边缘、1 在刃尖。膜上的这一片按 t 重新摆成刀的形状
     float s = 0.0;
     if (pod_len > 0.001) {
-        s = smoothstep(pod_root_cos, 1.0, dot(u, pod_dir));
+        float t = smoothstep(pod_root_cos, 1.0, dot(u, pod_dir));
+        s = t;
+        // 截面坐标：x 沿刃宽（挥击平面内），y 沿厚度（挥动轴）
+        vec3 ew = normalize(cross(pod_axis, pod_dir));
         vec3 lat = rest - pod_dir * dot(rest, pod_dir);
-        float out_of_plane = dot(lat, pod_axis);
-        vec3 in_plane = lat - pod_axis * out_of_plane;
-        lat = in_plane * mix(1.0, pod_width, s) + pod_axis * out_of_plane * mix(1.0, pod_thickness, s);
-        lat *= 1.0 - pod_tip_sharp * s * s * s;
-        float ext = pod_len * pow(s, pod_profile);
-        p = pod_dir * (dot(rest, pod_dir) + ext) + lat;
-        // 沿长度查弯折角：越往外弯得越多，弯成弧
-        float f = clamp(ext / pod_len, 0.0, 1.0) * 4.0;
-        int i0 = int(min(floor(f), 3.0));
-        float ang = mix(pod_bend_curve[i0], pod_bend_curve[i0 + 1], f - float(i0));
+        vec2 c = vec2(dot(lat, ew), dot(lat, pod_axis));
+        vec2 cn = length(c) > 1e-5 ? normalize(c) : vec2(0.0);
+        // 轮廓：几乎等宽，最后一段收尖。刃很短（刚伸出 / 快收回）时宽度跟着缩，不留一块方板
+        float w = t < pod_tip_start
+            ? mix(1.0, pod_keep_width, t / pod_tip_start)
+            : pod_keep_width * (1.0 - (t - pod_tip_start) / (1.0 - pod_tip_start));
+        float hw = 0.5 * pod_width * w * clamp(pod_len / 1.0, 0.3, 1.0);
+        float ht = hw * pod_thickness_ratio;
+        // 透镜形截面：宽度方向两边收成刃口
+        float along = mix(r * 0.35, r + pod_len, t);
+        vec3 blade = pod_dir * along + ew * (hw * cn.x) + pod_axis * (ht * cn.y * (1.0 - 0.3 * abs(cn.x)));
+        // 根部一小段从身体的球面平滑过渡到刃
+        float b = smoothstep(0.0, pod_root_blend, t);
+        p = mix(rest, blade, b);
+        // 单向轻微弯曲，越往刃尖越弯
+        float ang = pod_curve * t * t;
         p = rotate_axis(p, pod_axis, ang);
-        // 法线近似：突起侧面朝外，尖端朝前
-        vec3 side = lat + pod_dir * 0.15 * r;
-        n = normalize(mix(NORMAL, normalize(side + vec3(1e-5)), s));
+        // 扁截面的法线：宽面朝挥动轴方向，刃口朝两侧
+        vec3 nb = normalize(ew * cn.x * pod_thickness_ratio + pod_axis * cn.y + pod_dir * 0.02);
+        n = normalize(mix(NORMAL, nb, b));
         n = rotate_axis(n, pod_axis, ang);
     }
     v_blade = s * step(0.001, pod_len);

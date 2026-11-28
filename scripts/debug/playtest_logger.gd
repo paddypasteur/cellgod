@@ -22,7 +22,7 @@ extends Node
 ##   lock      锁定状态变化；info = on / off / switch
 ## sample 的 info = L 表示当时处于锁定状态；hurt 的 info = locked 表示挨打时处于锁定状态
 ##   input     玩家按下攻击或闪避；info = 动作名（算"命中后到下一次输入的间隔"用）
-## preset 列 = 当时在测的 A/B（2026-11-28 起：刃的韧劲 A 软 / B 硬）；bounce 列 = 弹射能力开（1）/关（0）
+## preset 列 = 当时在测的 A/B（2026-11-28 刃的软/硬 A/B 删除后暂时为空）；bounce 列 = 弹射能力开（1）/关（0）
 ##   chain 的结束原因 no_target = 窗口里推了方向按了攻击，但锥形里没目标（想弹没弹出来）
 
 @export var player: Player
@@ -206,7 +206,7 @@ func _write(event: String, elev: float, rel_y: float, on_screen: int, info: Stri
         "" if is_nan(rel_y) else "%.2f" % rel_y,
         "" if on_screen < 0 else str(on_screen),
         _threat_count(),
-        player.whip_preset,
+        "",
         info,
         1 if player.ability_chain_launch else 0,
     ])

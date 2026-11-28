@@ -265,43 +265,34 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 整团质量的弹簧：刚度越大跟得越紧；阻尼越小，收招后晃得越久
 @export var mass_stiffness: float = 160.0
 @export var mass_damping: float = 8.0
-## 刃方向的弹簧：追判定的方向。阻尼越小，挥到头冲过去（过冲）越多
-@export var blade_angle_stiffness: float = 420.0
-@export var blade_angle_damping: float = 13.0
+## 刃方向的弹簧：追判定的方向。刀是硬的，所以跟得很紧、几乎不冲过头——
+## 过冲留给整团质量（身体还会晃），刃本身"末端硬停"（2026-11-28 策划：韧在速度曲线上，不在刀身上）
+@export var blade_angle_stiffness: float = 1200.0
+@export var blade_angle_damping: float = 55.0
 ## 刃长度的弹簧
 @export var blade_length_stiffness: float = 380.0
 @export var blade_length_damping: float = 16.0
 ## 起手时刃的起点比判定起点再往后多少度：蓄的那一下往后拉
 @export var blade_wind_back_deg: float = 25.0
-## 韧劲（2026-11-28 开发者："整体看起来没有韧感"）：刃沿长度分成几段，每段追前一段，越往尖端越软。
-## 挥出去时尖端跟不上根部、整片向后弓；根部停下后尖端再抽过去——"弓 → 抽"
-## 甩多少是手感问题，做成 A/B 让开发者当场切（F2 / 十字键上）：
-##   A = 软，甩得多（尖端明显弓、收招时会打卷）；B = 硬，甩得少（只弓一点，收招不打卷）
-## 切换时会覆盖下面三个值
-@export_enum("A", "B") var whip_preset: String = "A":
-    set(value):
-        whip_preset = value
-        _apply_whip_preset()
-## 分几段
-@export_range(2, 8) var blade_segments: int = 4
-## 每往外一段，刚度乘以这个数（越小尖端越软、越跟不上）
-@export_range(0.1, 1.0) var blade_tip_softness: float = 0.6
-## 每段的阻尼比：越小抽回来时越弹（< 1 才会冲过头）
-@export_range(0.05, 1.5) var blade_segment_damping_ratio: float = 0.45
-## 每一段相对根部最多弯多少弧度（防止转一圈）
-@export var blade_bend_max: float = 1.4
-## 根部有多宽（度）：膜上离出手方向这么多度以内的部分会被拉出去。越大和身体连得越自然
+## 挥扫的速度曲线：角度 = 进度 ^ 这个数。1 = 匀速；大于 1 = 起手慢、越挥越快、到头硬停。
+## 那一下"唰"是加速度给的。判定和画面都按这条曲线走
+@export var swing_ease_power: float = 2.0
+## 根部有多宽（度）：膜上离出手方向这么多度以内的部分会被拉成刃
 @export_range(20.0, 85.0) var blade_root_deg: float = 72.0
-## 刃的横截面（2026-11-28 开发者："还是一个柱形""自然而然地过渡成偏片状的"）：
-## 在挥击平面内铺开的宽度倍数、垂直于挥击平面的厚度倍数。根部是身体（圆），往外逐渐过渡，尖端最扁
-@export var blade_width: float = 1.4
-@export_range(0.02, 1.0) var blade_thickness: float = 0.15
-## 刃尖收尖的程度（0 = 圆头，1 = 尖到一个点）
-@export_range(0.0, 1.0) var blade_tip_sharp: float = 0.85
-## 伸出长度沿刃的分布：大于 1 时质量堆在根部、尖端是一根细刺（剪影像"球 + 针"）；接近 1 时从身体到刃尖均匀变细
-@export var blade_profile: float = 0.9
-## 刃静止时也带一点弯（弧度），弯向挥过来的方向：停住时不是一根直棍
-@export var blade_rest_curve: float = 0.3
+## 刃的形状（2026-11-28 开发者："本质还是圆锥""特别规则的圆锥""要尽可能去模仿正常的那种冷兵器的样子"）。
+## 照冷兵器：大部分长度几乎等宽，只在最后一段收尖；截面是透镜形、有刃口；整体直的，只带一点单向的弯
+## 刃宽（米，挥击平面内）
+@export var blade_width: float = 0.7
+## 截面厚度 / 宽度（≤ 0.2 才像刀）
+@export_range(0.02, 0.5) var blade_thickness_ratio: float = 0.15
+## 从全长的多少开始收尖（之前几乎等宽）
+@export_range(0.3, 0.95) var blade_tip_start: float = 0.78
+## 等宽段到收尖前宽度只收窄到多少（1 = 完全等宽）
+@export_range(0.5, 1.0) var blade_keep_width: float = 0.9
+## 根部从身体鼓起来铺开成片的过渡段占全长多少：要短，不然整条看起来都在收细
+@export_range(0.02, 0.5) var blade_root_blend: float = 0.15
+## 刀身单向的轻微弯曲（弧度，刃尖处），弯向挥过来的方向，像军刀。不要大，大了就是鞭子
+@export var blade_curve: float = 0.1
 ## 胞质被带着走：挥击时膜纹顺挥击方向流动，挥完按这个速度散回乱流（每秒）
 @export var flow_align_decay: float = 2.5
 @export var flow_advect_speed: float = 5.0
@@ -339,9 +330,6 @@ var _mass: Vector3 = Vector3.ZERO
 var _mass_vel: Vector3 = Vector3.ZERO
 var _blade_angle: float = 0.0
 var _blade_angle_vel: float = 0.0
-## 刃沿长度的各段角度和角速度（0 = 根部 = _blade_angle）
-var _seg_angle: PackedFloat32Array = PackedFloat32Array()
-var _seg_vel: PackedFloat32Array = PackedFloat32Array()
 var _blade_len: float = 0.0
 var _blade_len_vel: float = 0.0
 var _blade_base: Vector3 = Vector3.FORWARD
@@ -463,7 +451,6 @@ func _ready() -> void:
     health = max_health
     _ensure_tiers()
     _apply_look()
-    _apply_whip_preset()
     _create_lock_marker()
 
 
@@ -484,8 +471,6 @@ func _unhandled_input(event: InputEvent) -> void:
         _heavy_buffer = input_buffer_time
     elif _is_fresh_press(event, &"dodge"):
         _dodge_buffer = dodge_buffer_time
-    elif _is_fresh_press(event, &"toggle_ab"):
-        whip_preset = "B" if whip_preset == "A" else "A"
     elif event.is_action_pressed(&"toggle_ability"):
         ability_chain_launch = not ability_chain_launch
         if not ability_chain_launch:
@@ -884,13 +869,12 @@ func _update_cell_motion(delta: float) -> void:
             attacking = true
             len_goal = _pod_length
     if attacking:
-        var ang_goal: float = lerpf(_swing_start, _swing_end, _swing_t)
+        var ang_goal: float = lerpf(_swing_start, _swing_end, _swing_progress())
         var acc: float = (ang_goal - _blade_angle) * blade_angle_stiffness - _blade_angle_vel * blade_angle_damping
         _blade_angle_vel += acc * delta
         _blade_angle += _blade_angle_vel * delta
         var follow: float = mass_follow_heavy if _attack_is_heavy else mass_follow_light
         mass_goal = _blade_dir() * follow * clampf(_blade_len / maxf(_target_length, 0.001), 0.0, 1.0)
-    _update_blade_segments(delta)
     var len_acc: float = (len_goal - _blade_len) * blade_length_stiffness - _blade_len_vel * blade_length_damping
     _blade_len_vel += len_acc * delta
     _blade_len = maxf(_blade_len + _blade_len_vel * delta, 0.0)
@@ -911,8 +895,7 @@ func _update_cell_motion(delta: float) -> void:
         _flow_align *= exp(-flow_align_decay * delta)
     _flow_advect += _flow_align * flow_advect_speed * delta
 
-    var curve: PackedFloat32Array = _blade_bend_curve()
-    var bend: float = curve[4]
+    var bend: float = -signf(_swing_end - _swing_start) * blade_curve
     if _body_material != null:
         # Player 自身不旋转，身体网格的模型空间就是世界朝向
         var m_len: float = _mass.length()
@@ -921,12 +904,13 @@ func _update_cell_motion(delta: float) -> void:
         _body_material.set_shader_parameter(&"pod_dir", _blade_dir())
         _body_material.set_shader_parameter(&"pod_len", _blade_len)
         _body_material.set_shader_parameter(&"pod_axis", _blade_axis)
-        _body_material.set_shader_parameter(&"pod_bend_curve", curve)
+        _body_material.set_shader_parameter(&"pod_curve", bend)
         _body_material.set_shader_parameter(&"pod_root_cos", cos(deg_to_rad(blade_root_deg)))
         _body_material.set_shader_parameter(&"pod_width", blade_width)
-        _body_material.set_shader_parameter(&"pod_thickness", blade_thickness)
-        _body_material.set_shader_parameter(&"pod_tip_sharp", blade_tip_sharp)
-        _body_material.set_shader_parameter(&"pod_profile", blade_profile)
+        _body_material.set_shader_parameter(&"pod_thickness_ratio", blade_thickness_ratio)
+        _body_material.set_shader_parameter(&"pod_tip_start", blade_tip_start)
+        _body_material.set_shader_parameter(&"pod_keep_width", blade_keep_width)
+        _body_material.set_shader_parameter(&"pod_root_blend", blade_root_blend)
         _body_material.set_shader_parameter(&"flow_dir", _flow_dir)
         _body_material.set_shader_parameter(&"flow_align", _flow_align)
         _body_material.set_shader_parameter(&"flow_advect", _flow_advect)
@@ -944,57 +928,6 @@ func _update_cell_motion(delta: float) -> void:
             _droplets.initial_velocity_max = 2.0 + speed * 0.25
 
 
-func _apply_whip_preset() -> void:
-    if whip_preset == "A":
-        blade_tip_softness = 0.6
-        blade_segment_damping_ratio = 0.45
-        blade_bend_max = 1.4
-    else:
-        blade_tip_softness = 0.8
-        blade_segment_damping_ratio = 0.7
-        blade_bend_max = 0.8
-
-
-## 一串弹簧：第 i 段追第 i-1 段，刚度按 blade_tip_softness 逐段变小
-func _update_blade_segments(delta: float) -> void:
-    if _seg_angle.size() != blade_segments + 1:
-        _seg_angle.resize(blade_segments + 1)
-        _seg_vel.resize(blade_segments + 1)
-        for i: int in _seg_angle.size():
-            _seg_angle[i] = _blade_angle
-            _seg_vel[i] = 0.0
-    _seg_angle[0] = _blade_angle
-    _seg_vel[0] = _blade_angle_vel
-    var k: float = blade_angle_stiffness
-    for i: int in range(1, _seg_angle.size()):
-        k *= blade_tip_softness
-        var c: float = 2.0 * blade_segment_damping_ratio * sqrt(k)
-        var acc: float = (_seg_angle[i - 1] - _seg_angle[i]) * k - (_seg_vel[i] - _seg_vel[i - 1]) * c
-        _seg_vel[i] += acc * delta
-        _seg_angle[i] += _seg_vel[i] * delta
-        # 每段相对前一段的弯折有上限，防止转出一圈
-        var lim: float = blade_bend_max / blade_segments
-        var off: float = clampf(_seg_angle[i] - _seg_angle[i - 1], -lim, lim)
-        _seg_angle[i] = _seg_angle[i - 1] + off
-
-
-## 给着色器的 5 个采样点（根部 → 尖端）：各段相对根部的弯折，加上静止时的那一点弯
-func _blade_bend_curve() -> PackedFloat32Array:
-    var out := PackedFloat32Array()
-    out.resize(5)
-    var n: int = _seg_angle.size() - 1
-    var rest: float = -signf(_swing_end - _swing_start) * blade_rest_curve
-    for j: int in 5:
-        var f: float = j / 4.0
-        var off: float = 0.0
-        if n > 0:
-            var x: float = f * n
-            var i0: int = mini(int(floor(x)), n - 1)
-            off = lerpf(_seg_angle[i0], _seg_angle[i0 + 1], x - i0) - _seg_angle[0]
-        out[j] = clampf(off + rest * f, -blade_bend_max, blade_bend_max)
-    return out
-
-
 ## 画面上的刃当前指向（追判定的弹簧，不是判定本身）
 func _blade_dir() -> Vector3:
     return _blade_base.rotated(_blade_axis, _blade_angle)
@@ -1006,11 +939,6 @@ func _reset_blade_for_swing() -> void:
     _blade_axis = _swing_axis
     _blade_angle = _swing_start + deg_to_rad(blade_wind_back_deg) * signf(_swing_start)
     _blade_angle_vel = 0.0
-    _seg_angle.resize(blade_segments + 1)
-    _seg_vel.resize(blade_segments + 1)
-    for i: int in _seg_angle.size():
-        _seg_angle[i] = _blade_angle
-        _seg_vel[i] = 0.0
 
 
 func _create_droplets() -> void:
@@ -1342,7 +1270,12 @@ func _swing_half_arc(heavy: bool) -> float:
 
 ## 伪足当前实际指向，随挥扫进度转动
 func _pod_dir() -> Vector3:
-    return _attack_dir.rotated(_swing_axis, lerpf(_swing_start, _swing_end, _swing_t))
+    return _attack_dir.rotated(_swing_axis, lerpf(_swing_start, _swing_end, _swing_progress()))
+
+
+## 挥扫的角度进度（0..1）：起手慢、越挥越快、到头硬停
+func _swing_progress() -> float:
+    return pow(clampf(_swing_t, 0.0, 1.0), swing_ease_power)
 
 
 ## 把挥扫推进到 to_t，按角度步长逐段检测，防止一帧扫过头跳过目标。
@@ -1350,7 +1283,8 @@ func _pod_dir() -> Vector3:
 func _sweep_swing_to(to_t: float) -> bool:
     var from_t: float = _swing_t
     var swept_deg: float = rad_to_deg(absf(_swing_end - _swing_start) * (to_t - from_t))
-    var steps: int = maxi(1, ceili(swept_deg / swing_check_step_deg))
+    # 角度按速度曲线走，末段比匀速快 swing_ease_power 倍，步数按最快的那段算
+    var steps: int = maxi(1, ceili(swept_deg * maxf(swing_ease_power, 1.0) / swing_check_step_deg))
     for i: int in range(1, steps + 1):
         _swing_t = lerpf(from_t, to_t, float(i) / float(steps))
         if _check_pod_overlap() and not swing_pass_through:
@@ -1610,8 +1544,7 @@ func is_dodging() -> bool:
 
 ## 血条下面那行提示：弹射开关状态常驻（试玩时开发者要知道自己在玩哪种），闪避冷却中再加一句
 func get_hud_hint() -> String:
-    var hint: String = "刃：%s（F2 / 十字键上）    弹射：%s（F3 / 十字键下）" % [
-        "A 软" if whip_preset == "A" else "B 硬", "开" if ability_chain_launch else "关"]
+    var hint: String = "弹射：%s（F3 / 十字键下）" % ("开" if ability_chain_launch else "关")
     if _dodge_cooldown_timer > 0.0:
         hint += "    闪避冷却中"
     return hint

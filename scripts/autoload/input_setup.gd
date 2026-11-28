@@ -33,8 +33,7 @@ func _enter_tree() -> void:
     _add_action(&"toggle_debug", [_key(KEY_F1), _joy_button(JOY_BUTTON_BACK)])
     # 能力开关（当前：弹射），给开发者当场对比用
     _add_action(&"toggle_ability", [_key(KEY_F3), _joy_button(JOY_BUTTON_DPAD_DOWN)])
-    # 当前在测的 A/B 切换（2026-11-28 起：刃的韧劲）
-    _add_action(&"toggle_ab", [_key(KEY_F2), _joy_button(JOY_BUTTON_DPAD_UP)])
+    # F2 / 十字键上 留给以后的 A/B 切换（2026-11-28 刃的"软/硬"A/B 已删）
     # 闪避：手柄 B（类魂惯例），键鼠临时用右键
     _add_action(&"dodge", [_mouse(MOUSE_BUTTON_RIGHT), _joy_button(JOY_BUTTON_B)])
 
