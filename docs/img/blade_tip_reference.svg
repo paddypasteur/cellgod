@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="220" viewBox="0 0 680 220">
+<rect width="680" height="220" fill="#ffffff"/>
+<text x="340" y="30" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">刃的末端（放大）</text>
+<path d="M100,88 L300,86 L350,110 L300,134 L100,132 Z" fill="#888780"/>
+<text x="220" y="172" font-size="14" fill="#2C2C2A" text-anchor="middle" font-family="sans-serif">不要</text>
+<text x="220" y="192" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">末端收成一个凸尖</text>
+<path d="M370,88 C500,92 570,102 612,109 C615,110 615,112 612,113 C570,120 500,130 370,132 Z" fill="#1D9E75"/>
+<text x="490" y="172" font-size="14" fill="#2C2C2A" text-anchor="middle" font-family="sans-serif">要</text>
+<text x="490" y="192" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">两侧都薄，自然变薄到没有</text>
+</svg>
