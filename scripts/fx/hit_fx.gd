@@ -1,9 +1,10 @@
 class_name HitFx
 extends Node3D
-## 命中特效（白盒版）：**切口 + 胞质从被打穿的另一侧迸出 → 在体液里被迅速拖停 → 缓缓飘一会儿 → 淡掉**。
+## 命中特效（白盒版）：**切口 + 胞质从接触点朝刀来的那一侧溅起（空心锥）→ 在体液里被迅速拖停 → 缓缓飘一会儿 → 淡掉**。
 ## DESIGN《粒子：方向、减速、永存》（2026-11-28）：
 ##   - 不要环：环形表示钝器 / 爆炸那种没有方向的冲击（开发者："它是一个圆环，像钝器打在那上面"）
-##   - 沿冲击方向、从被击中物体的另一侧迸出（开发者 11-28："穿过去从另一侧迸出"）
+##   - 位置永远是真实接触点（以前按"另一侧"算，对杆菌常落在身体外的空地上）
+##   - 空心锥，锥轴朝刀来的方向（开发者："它周围的灰尘会反方向地溅起来"；撞击溅射的实测规律），张角约 125°
 ##   - 指数减速后停住：整个游戏在体液里，飞出去的东西本就该被黏滞介质迅速拖停，不能匀速飞走再啪地消失
 ##   - 停下之后缓缓飘一会儿再淡（Vlambeer 的"永存"）
 ##   - 随机：尺寸 ±20%、速度 ±30%、朝向随机
@@ -28,19 +29,28 @@ var _mm: MultiMesh = null
 var _color: Color = Color.WHITE
 
 
-## at：迸出的位置（被击中物体朝冲击方向的那一侧表面）；impulse_dir：冲击方向（刃的运动方向）；
-## slash_dir：切口沿它展开
-static func spawn(parent: Node, at: Vector3, impulse_dir: Vector3, slash_dir: Vector3, tier: HitTier,
+## at：真实接触点（目标表面）；normal：那里的外法线；slash_dir：刃在命中点的运动方向（切口沿它展开，溅射逆着它）
+static func spawn(parent: Node, at: Vector3, normal: Vector3, slash_dir: Vector3, tier: HitTier,
         cytoplasm_color: Color, membrane_color: Color) -> void:
     if parent == null or tier == null:
         return
     var fx := HitFx.new()
     parent.add_child(fx)
     fx.global_position = at
-    fx._build(impulse_dir.normalized(), slash_dir.normalized(), tier, cytoplasm_color, membrane_color)
+    fx._build(normal.normalized(), slash_dir.normalized(), tier, cytoplasm_color, membrane_color)
 
 
-func _build(impulse_dir: Vector3, slash_dir: Vector3, tier: HitTier, cyto: Color, membrane: Color) -> void:
+## 锥轴：在"刀来的方向"和"表面法线"之间取，斜砍时整体偏向来向一侧；保证朝外，不往身体里溅
+static func cone_axis(normal: Vector3, slash_dir: Vector3, toward_incoming: float) -> Vector3:
+    var axis: Vector3 = (-slash_dir * toward_incoming + normal * (1.0 - toward_incoming)).normalized()
+    if axis.dot(normal) < 0.2:
+        axis = (axis + normal * (0.2 - axis.dot(normal) + 0.05)).normalized()
+    return axis
+
+
+func _build(normal: Vector3, slash_dir: Vector3, tier: HitTier, cyto: Color, membrane: Color) -> void:
+    var cfg: ImpactConfig = tier.config if tier.config != null else ImpactConfig.get_default()
+    var impulse_dir: Vector3 = cone_axis(normal, slash_dir, cfg.splash_toward_incoming)
     _spawn_cut(slash_dir, membrane)
     var count: int = tier.get_particle_count()
     if count <= 0:
@@ -76,9 +86,10 @@ func _build(impulse_dir: Vector3, slash_dir: Vector3, tier: HitTier, cyto: Color
         side_a = impulse_dir.cross(Vector3.RIGHT)
     side_a = side_a.normalized()
     var side_b: Vector3 = impulse_dir.cross(side_a).normalized()
+    var half: float = deg_to_rad(cfg.splash_cone_deg * 0.5)
     for i: int in count:
-        # 锥形散开（约 35°），速度 ±30%，大小 ±20%（压成略扁的椭球，朝向随机才看得出来）
-        var spread: float = deg_to_rad(35.0) * sqrt(randf())
+        # 空心锥：偏离锥轴的角度落在内圈到外圈之间；速度 ±30%，大小 ±20%（略扁的椭球，朝向随机才看得出来）
+        var spread: float = lerpf(half * cfg.splash_hollow, half, randf())
         var around: float = randf() * TAU
         var dir: Vector3 = (impulse_dir * cos(spread)
             + (side_a * cos(around) + side_b * sin(around)) * sin(spread)).normalized()

@@ -20,6 +20,8 @@ extends Node
 ##   combo     一套轻击连段结束；info = 这套打了几段
 ##   hit       打中一个目标；info = 力度（轻 0 / 重 1）
 ##   lock      锁定状态变化；info = on / off / switch
+##   wave      波次测试台：第几波开始；info = 波次/该波敌人数
+##   run_end   一局结束；info = win|lose/到第几波/用时秒数
 ## sample 的 info = L 表示当时处于锁定状态；hurt 的 info = locked 表示挨打时处于锁定状态
 ##   input     玩家按下攻击或闪避；info = 动作名（算"命中后到下一次输入的间隔"用）
 ## preset 列 = 当时在测的 A/B（2026-11-28 刃的软/硬 A/B 删除后暂时为空）；bounce 列 = 弹射能力开（1）/关（0）
@@ -51,6 +53,7 @@ var longest_chain: int = 0
 
 
 func _ready() -> void:
+    add_to_group(&"playtest_logger")
     add_to_group(&"playtest_logger")
     if not enabled or player == null:
         return
@@ -212,6 +215,11 @@ func _write(event: String, elev: float, rel_y: float, on_screen: int, info: Stri
     ])
     # 每行都落盘：试玩可能直接关窗口，不能指望正常退出时才写
     _file.flush()
+
+
+## 给别的系统（波次测试台）记一条事件
+func log_event(event: String, info: String) -> void:
+    _write(event, 0.0, NAN, -1, info)
 
 
 ## 调试面板用

@@ -1323,17 +1323,26 @@ func _deal_hit(target: Object, direction: Vector3) -> void:
         hit_stop.call(&"trigger", tier.get_hitstop())
 
 
-## 命中特效：切口沿刃的运动方向；胞质沿冲击方向（也是刃的运动方向）从目标的另一侧迸出
+## 命中特效：放在真实接触点（刃碰到的目标表面那一点），胞质朝刀来的那一侧溅起（空心锥）。
+## 2026-11-28 开发者："一个东西打到一个上面去，它周围的灰尘会反方向地溅起来"；策划查证撞击溅射锥轴反平行于撞击方向
 func _spawn_hit_fx(target: Node3D, tier: HitTier) -> void:
     if target == null or tier == null:
         return
-    var target_radius: Variant = target.get("body_radius")
-    var radius: float = float(target_radius) if target_radius != null else 0.6
     # 绕轴转动的点的速度方向 = 轴 × 半径方向；挥扫角度在减小时方向反过来
     var slash: Vector3 = _swing_axis.cross(_pod_dir()).normalized() * signf(_swing_end - _swing_start)
-    var exit_point: Vector3 = target.global_position + slash * radius
+    var point: Vector3
+    var normal: Vector3
+    if target.has_method(&"surface_point_near"):
+        var res: Array = target.call(&"surface_point_near", _last_contact)
+        point = res[0]
+        normal = res[1]
+    else:
+        var radius_v: Variant = target.get("body_radius")
+        var radius: float = float(radius_v) if radius_v != null else 0.6
+        normal = (_last_contact - target.global_position).normalized()
+        point = target.global_position + normal * radius
     var parent: Node = get_tree().current_scene if get_tree().current_scene != null else get_parent()
-    HitFx.spawn(parent, exit_point, slash, slash, tier, fx_cytoplasm_color, fx_membrane_color)
+    HitFx.spawn(parent, point, normal, slash, tier, fx_cytoplasm_color, fx_membrane_color)
 
 
 ## 把观感资源套到身体、伪足、鼓包上，并在身体里放一个实核。

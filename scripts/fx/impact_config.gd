@@ -31,15 +31,20 @@ extends Resource
 @export var wobble_exp: float = 0.55
 
 @export_group("命中粒子")
-## 数量、初速（米/秒）、直径（米）、存活（秒，含减速、漂浮、淡出）
-@export var particle_count_base: float = 10.0
+## 数量、初速（米/秒）、直径（米）、存活（秒，含减速、漂浮、淡出）。2026-11-28 开发者仍说"太小了"，数量和大小上调
+@export var particle_count_base: float = 14.0
 @export var particle_count_exp: float = 1.0
 @export var particle_speed_base: float = 7.0
 @export var particle_speed_exp: float = 0.5
-@export var particle_size_base: float = 0.14
+@export var particle_size_base: float = 0.2
 @export var particle_size_exp: float = 0.3
 @export var particle_life_base: float = 1.4
 @export var particle_life_exp: float = 0.3
+## 溅射锥（2026-11-28 策划查证：撞击溅射是空心锥，锥轴反平行于撞击方向，张角约 120–130°）：
+## 张角（度）；空心程度（内圈半角 / 外圈半角，0 = 实心）；锥轴偏向"刀来的方向"多少（其余偏向接触点的表面法线）
+@export var splash_cone_deg: float = 125.0
+@export_range(0.0, 0.95) var splash_hollow: float = 0.6
+@export_range(0.0, 1.0) var splash_toward_incoming: float = 0.6
 
 static var _default: ImpactConfig = null
 

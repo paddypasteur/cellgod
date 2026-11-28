@@ -189,6 +189,17 @@ def main() -> None:
     if ys:
         print(f"玩家高度中位数 {statistics.median(ys):.1f} 米（球心 = 0；用来验证「敌人多从上方起手」是不是因为玩家爱待在下半球）")
 
+    # ---- 波次测试台（2026-11-28 起：wave / run_end 事件）。"打到第几波"是第一个能跨版本比较的成绩
+    ends = events("run_end")
+    if events("wave") or ends:
+        print("—— 波次测试台 ——")
+        for r in ends:
+            result, wave, secs = r["info"].split("/")
+            print(f"  一局：{'全清' if result == 'win' else '倒下'}，到第 {wave} 波，用时 {float(secs):.0f} 秒")
+        if not ends:
+            last = events("wave")[-1]["info"].split("/")[0]
+            print(f"  （这份记录里没有结束事件：打到第 {last} 波时关掉了游戏）")
+
     # ---- 锁定（2026-11-28 起：lock 事件 on/off/switch）
     locks = events("lock")
     if not locks:

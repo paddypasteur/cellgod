@@ -11,6 +11,8 @@ var _z0: float = 0.0
 
 func _initialize() -> void:
     var scene: Node = (load("res://scenes/arena.tscn") as PackedScene).instantiate()
+    # 冒烟测试在沙盒里跑（固定的 3 只敌人），不开波次测试台
+    scene.set("wave_mode", false)
     # 把敌人挪走，免得它们的攻击干扰测试
     scene.get_node("Enemies").queue_free()
     root.add_child(scene)

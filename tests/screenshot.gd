@@ -14,6 +14,8 @@ func _initialize() -> void:
             _out_dir = arg.trim_prefix("--out=")
     DirAccess.make_dir_recursive_absolute(_out_dir)
     var scene: Node = (load("res://scenes/arena.tscn") as PackedScene).instantiate()
+    # 冒烟测试在沙盒里跑（固定的 3 只敌人），不开波次测试台
+    scene.set("wave_mode", false)
     # 截图不是真人试玩，不写试玩记录，免得混进开发者的数据
     scene.get_node("PlaytestLogger").set("enabled", false)
     root.add_child(scene)

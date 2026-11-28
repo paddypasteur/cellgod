@@ -10,6 +10,10 @@ enum State { APPROACH, WINDUP, ATTACK, RECOVER, HITSTUN, DEAD }
 
 const STATE_LABELS: PackedStringArray = ["接近", "前摇", "攻击", "硬直", "受击", "死亡"]
 
+
+## 死了（波次测试台用它数还剩几只）
+signal died
+
 @export_group("生命")
 @export var max_health: float = 40.0
 ## 死后多少秒在出生点复活（方便连续测试）。0 = 不复活
@@ -241,6 +245,7 @@ func _enter(state: State) -> void:
             _collision.set_deferred(&"disabled", true)
             _visual.visible = false
             _label.visible = false
+            died.emit()
 
 
 func _respawn() -> void:
@@ -313,6 +318,26 @@ func _apply_arena_bounds() -> void:
 
 
 ## 玩家伪足命中时调用（和靶子同一个接口）
+## 身体表面上离 p 最近的点和那里的外法线（世界坐标）：[点, 法线]。
+## 命中粒子要从这里溅起（2026-11-28 开发者："在一个莫名其妙的旁边的空地上产生粒子"——以前按"另一侧"算的点对杆菌常落在身体外）。
+## 按画面上的杆状身体（胶囊）算，不按碰撞球
+func surface_point_near(p: Vector3) -> Array:
+    var body := _mesh.mesh as CapsuleMesh
+    var radius: float = body.radius if body != null else 0.45
+    var half: float = maxf((body.height if body != null else 1.8) * 0.5 - radius, 0.0)
+    var xf: Transform3D = _mesh.global_transform
+    var a: Vector3 = xf * Vector3(0.0, -half, 0.0)
+    var b: Vector3 = xf * Vector3(0.0, half, 0.0)
+    var on_axis: Vector3 = Geometry3D.get_closest_point_to_segment(p, a, b)
+    var normal: Vector3 = p - on_axis
+    if normal.length_squared() < 0.0001:
+        normal = Vector3.UP
+    normal = normal.normalized()
+    # 胶囊在 Visual 里可能被前摇膨胀缩放过，半径按缩放后的算
+    var r_world: float = radius * xf.basis.get_scale().x
+    return [on_axis + normal * r_world, normal]
+
+
 ## contact = 接触点（世界坐标），impulse = 冲击方向（刃的运动方向）；不给时按 direction 从正面打。
 ## knockback（米/秒）和 wobble（形变倍率）由打出这一击的冲击系统算好传进来（DESIGN《冲击系统》），
 ## 敌人自己不再各调各的

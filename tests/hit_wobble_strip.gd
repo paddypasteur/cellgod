@@ -46,8 +46,9 @@ func _physics_process(_delta: float) -> bool:
         var heavy := HitTier.make("重击", 2.5)
         _enemy.take_hit(1.0, Vector3.LEFT, Vector3(0.45, 0.0, 0.0), Vector3.LEFT, heavy.get_knockback(), heavy.get_wobble())
         _enemy.velocity = Vector3.ZERO
-        # 命中粒子：从被打穿的另一侧（-X）沿冲击方向迸出
-        HitFx.spawn(_vp, Vector3(-0.45, 0.0, 0.0), Vector3.LEFT, Vector3.LEFT, heavy, Color(1.0, 0.97, 0.9), Color(0.45, 0.6, 0.25))
+        # 命中粒子：刀从 +X 一侧扫过来（运动方向 -X），从接触点溅起，开口朝刀来的 +X 一侧
+        var hit: Array = _enemy.surface_point_near(Vector3(1.0, 0.0, 0.0))
+        HitFx.spawn(_vp, hit[0], hit[1], Vector3.LEFT, heavy, Color(1.0, 0.97, 0.9), Color(0.45, 0.6, 0.25))
     var k: int = _frame - _hit_frame
     if k >= -STEP and k % STEP == 0 and k / STEP < FRAMES:
         var idx: int = k / STEP + 1

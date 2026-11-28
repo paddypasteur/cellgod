@@ -3,7 +3,25 @@
 > **所有者：开发 Claude。** 策划 Claude 只读，也可以直接读仓库代码；有出入时以代码为准。
 > 最后更新：2026-11-28
 
-## 最近一次改动（2026-11-28 第九批：冲击系统、命中粒子重做、受击愣住）
+## 最近一次改动（2026-11-28 第十批：粒子从接触点反溅、波次测试台、背景音乐）
+
+按策划 2026-11-28 晚两条（粒子方向撤销裁定 + 背景音乐与波次测试台）做的。
+
+- **命中粒子位置 = 真实接触点**：判定把"刃上离目标最近的点"交给目标，目标按自己的形状算出**身体表面**上的点和外法线
+  （Enemy 的 `surface_point_near`，按画面上的杆状胶囊算，不按碰撞球）。以前按"另一侧"算的点对杆菌常落在身体外
+- **方向**：空心锥，锥轴在"刀来的方向"和表面法线之间（偏来向 60%），张角 125°（`ImpactConfig` 的 `splash_*`）。粒子数量和大小基准上调
+- **波次测试台**（`scripts/arena/wave_bench.gd` + `scripts/ui/wave_bench_hud.gd`，DESIGN《波次测试台》第一步）：**默认开**（Arena 的 `wave_mode`）。
+  场景里的 3 只固定敌人撤掉；开局 3 秒倒数，然后一波一波刷：2 / 3 / 4 / 5 / 6 只，波间 3 秒；
+  敌人出生在离玩家 9 米、方向随机（上下也随机）的地方；**固定血量、波间不回血、死了这局结束**；全清就赢。
+  结束时游戏暂停、显示结果（"撑到第几波 / 用时"），按 A / 回车 / 空格重开（重新加载场景）。
+  没有 ATP、没有新敌人种类、没有波间强化（三步走的第一步只上赌注）
+  - 试玩记录新增 `wave`、`run_end` 事件，统计脚本输出每局结果。⚠ 重开一局会重新加载场景，**每局一个记录文件**
+  - 冒烟测试都改成在沙盒里跑（`wave_mode = false`）；新增 `tests/wave_bench_smoke.gd`（9 项）
+- **背景音乐**：`scripts/autoload/music.gd`（autoload `Music`），播放策划合成的 `audio/body_theme_loop.ogg`，
+  单独的 `Music` 总线（`volume_db` 默认 -14），导入时打开了 Loop，无缝循环；重开一局、暂停时都不中断。无界面模式（测试）不播放
+- Enemy 新增 `died` 信号
+
+## 上一批改动（2026-11-28 第九批：冲击系统、命中粒子重做、受击愣住）
 
 按策划 2026-11-28《把冲击做成系统、粒子改方向+指数减速、受击要打断朝向》做的。
 
@@ -343,6 +361,7 @@
 - `tests/screenshot.gd`：窗口模式跑主场景，存待机、锁定、轻击前摇/挥扫/后摇、重击聚合/挥扫截图，开发 Claude 用来自查画面
 - `tests/lock_smoke.gd`：锁定的 19 项冒烟测试
 - `tests/silhouette_strip.gd` / `.py`：攻击动作逐帧剪影图
+- `tests/wave_bench_smoke.gd`：波次测试台 9 项（刷波、全清赢、倒下输、结束暂停）
 - `tests/hit_wobble_smoke.gd`：敌人受击形变的 8 项测试；`tests/hit_wobble_strip.gd`：受击逐帧剪影
 - `tests/lock_stability.gd`：无界面跑 30 秒，统计目标切换和"乱跳"次数
 - `tests/dodge_smoke.gd`：闪避的 9 项冒烟测试
@@ -365,6 +384,8 @@ HUD 视野外指示器、鼠标转镜头、ATP、质量系统、玩家死亡流�
 | `scripts/autoload/hit_stop.gd` | 全局命中定格 |
 | `scripts/autoload/sfx.gd` | 代码合成的占位音效 |
 | `scripts/fx/impact_config.gd` / `hit_tier.gd` / `hit_fx.gd` | 冲击系统基准 / 打击档位（主强度）/ 命中特效 |
+| `scripts/arena/wave_bench.gd` / `scripts/ui/wave_bench_hud.gd` | 波次测试台（默认开）/ 它的屏幕显示 |
+| `scripts/autoload/music.gd` / `audio/` | 背景音乐（占位，策划合成） |
 | `scripts/fx/hit_wobble.gd` | 受击形变"先脆后晃"（通用，挂在敌人上） |
 | `shaders/cell_membrane.gdshader` / `scripts/fx/cell_look.gd` | 细胞膜着色器 / 细胞观感参数（免疫族、细菌族） |
 | `scripts/debug/playtest_logger.gd` | 试玩记录器（arena.tscn 里的 PlaytestLogger 节点） |

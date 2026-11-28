@@ -18,6 +18,8 @@ var _frames_with_target: int = 0
 
 func _initialize() -> void:
     var scene: Node = (load("res://scenes/arena.tscn") as PackedScene).instantiate()
+    # 冒烟测试在沙盒里跑（固定的 3 只敌人），不开波次测试台
+    scene.set("wave_mode", false)
     root.add_child(scene)
     _player = scene.get_node("Player")
     for arg: String in OS.get_cmdline_user_args():
