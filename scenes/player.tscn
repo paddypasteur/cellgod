@@ -13,20 +13,6 @@ material = SubResource("Mat_body")
 radius = 0.5
 height = 1.0
 
-[sub_resource type="StandardMaterial3D" id="Mat_pod"]
-albedo_color = Color(0.45, 0.78, 0.68, 1)
-
-[sub_resource type="CylinderMesh" id="Mesh_pod"]
-material = SubResource("Mat_pod")
-top_radius = 0.14
-bottom_radius = 0.2
-height = 1.0
-
-[sub_resource type="SphereMesh" id="Mesh_bulge"]
-material = SubResource("Mat_pod")
-radius = 0.5
-height = 1.0
-
 [sub_resource type="StandardMaterial3D" id="Mat_marker"]
 shading_mode = 0
 albedo_color = Color(1, 0.9, 0.3, 1)
@@ -72,14 +58,6 @@ mesh = SubResource("Mesh_body")
 [node name="Nose" type="MeshInstance3D" parent="Facing"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.48)
 mesh = SubResource("Mesh_nose")
-
-[node name="Pseudopod" type="MeshInstance3D" parent="."]
-visible = false
-mesh = SubResource("Mesh_pod")
-
-[node name="Bulge" type="MeshInstance3D" parent="."]
-visible = false
-mesh = SubResource("Mesh_bulge")
 
 [node name="AimMarker" type="MeshInstance3D" parent="."]
 cast_shadow = 0

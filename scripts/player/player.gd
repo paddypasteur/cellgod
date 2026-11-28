@@ -248,24 +248,51 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export var body_radius: float = 0.5
 ## 重击聚合时显示一片扇形，预告将要扫过的范围
 @export var show_reach_preview: bool = true
-## 重击聚合到最后时膜鼓起部分沿攻击方向拉长到多少（相对身体直径）
-@export var bulge_max_stretch: float = 1.2
 ## 细胞观感（半透明膜 + 实核 + 膜流动 + 边缘高光）。免疫族配色；为空时用默认值
 @export var look: CellLook
 
-@export_group("伪足与本体形变")
-## 2026-11-28 开发者："伸出来一根比细胞大 N 倍的柱子太奇怪了，要自然而然从膜上凸出来，浑然一体。"
-## 违和感主要来自本体纹丝不动——所以出手时整个细胞朝出手方向抻长、背面凹进去，收回时弹回来
-## 伪足根部半径（相对身体半径）：根部宽，和身体连成一片看不出接缝
-@export_range(0.1, 1.0) var pod_root_ratio: float = 0.75
-## 伪足刃口（尖端）半径（米）：往外逐渐收细，不是等粗的圆柱
-@export var pod_tip_radius_visual: float = 0.03
-## 本体朝出手方向抻长的程度：轻击 / 重击（0 = 不变形）
-@export_range(0.0, 1.0) var body_stretch_light: float = 0.3
-@export_range(0.0, 1.0) var body_stretch_heavy: float = 0.5
-## 形变的弹簧：刚度越大跟得越紧；阻尼越小，收回时弹得越明显
-@export var body_stretch_stiffness: float = 140.0
-@export var body_stretch_damping: float = 9.0
+@export_group("攻击动作（全细胞）")
+## 2026-11-28 开发者："一个细胞的攻击应该化为一个全身性的动作……整个细胞的惯性，包括整个胞质流动，
+## 它应该是浑然一体的，不是机械地伸出来、挥完再收回去。"（DESIGN《攻击动作 = 全细胞惯性》）
+## 所以没有刃模型：刃是膜被拉出去的那一段（着色器顶点形变）。判定照旧按挥扫走，
+## 画面上的刃用弹簧追判定——追得慢一点就有"甩"和尾部的弯，到头收不住就是过冲，收回后晃一会儿就是沉
+## 蓄：整团质量往出手方向的反面聚的程度（轻击 / 重击）
+@export_range(0.0, 1.0) var mass_squash_light: float = 0.45
+@export_range(0.0, 1.0) var mass_squash_heavy: float = 0.9
+## 发：刃伸出去时整团质量跟着往前冲的程度（轻击 / 重击）
+@export_range(0.0, 1.0) var mass_follow_light: float = 0.4
+@export_range(0.0, 1.0) var mass_follow_heavy: float = 0.55
+## 整团质量的弹簧：刚度越大跟得越紧；阻尼越小，收招后晃得越久
+@export var mass_stiffness: float = 160.0
+@export var mass_damping: float = 8.0
+## 刃方向的弹簧：追判定的方向。阻尼越小，挥到头冲过去（过冲）越多
+@export var blade_angle_stiffness: float = 420.0
+@export var blade_angle_damping: float = 13.0
+## 刃长度的弹簧
+@export var blade_length_stiffness: float = 380.0
+@export var blade_length_damping: float = 16.0
+## 起手时刃的起点比判定起点再往后多少度：蓄的那一下往后拉
+@export var blade_wind_back_deg: float = 25.0
+## 尾部被甩在后面的程度：每 1 弧度/秒的挥动速度弯多少弧度；最多弯多少
+@export var blade_bend_per_speed: float = 0.035
+@export var blade_bend_max: float = 1.0
+## 根部有多宽（度）：膜上离出手方向这么多度以内的部分会被拉出去。越大和身体连得越自然
+@export_range(20.0, 85.0) var blade_root_deg: float = 72.0
+## 尖端粗细（相对根部）、沿挥动轴压扁的程度（刃是扁的）
+@export_range(0.0, 1.0) var blade_thin: float = 0.35
+@export_range(0.0, 1.0) var blade_flat: float = 0.75
+## 伸出长度沿刃的分布：大于 1 时质量堆在根部、尖端是一根细刺（剪影像"球 + 针"）；接近 1 时从身体到刃尖均匀变细
+@export var blade_profile: float = 0.9
+## 刃静止时也带一点弯（弧度），弯向挥过来的方向：停住时不是一根直棍
+@export var blade_rest_curve: float = 0.3
+## 胞质被带着走：挥击时膜纹顺挥击方向流动，挥完按这个速度散回乱流（每秒）
+@export var flow_align_decay: float = 2.5
+@export var flow_advect_speed: float = 5.0
+## 核跟着整团质量走的程度（重心移动）
+@export var core_follow: float = 0.6
+## 挥动时从刃尖甩出的小液滴（大小、寿命、方向都是随机的）
+@export var droplets_enabled: bool = true
+@export var droplet_amount: int = 40
 
 @export_group("锁定")
 ## R3 / Q / 鼠标中键 锁定或解锁；十字键 ← → （键盘 Z / C）切换到画面上左边 / 右边相邻的目标。
@@ -290,12 +317,21 @@ var _hurt_flash_timer: float = 0.0
 ## 身体膜的材质（受击闪红、无敌发白等都改它的颜色参数）
 var _body_material: ShaderMaterial = null
 var _body_base_color: Color = Color.WHITE
-## 伪足的材质：挥击时硬化成刃（hardness=1），收回时软回去
-var _pod_material: ShaderMaterial = null
-## 本体抻长的弹簧状态
-var _stretch: float = 0.0
-var _stretch_vel: float = 0.0
-var _stretch_dir: Vector3 = Vector3.FORWARD
+## 全细胞动作的状态：整团质量偏移（矢量弹簧）、画面上的刃（方向角、长度各一个弹簧）、胞质流动
+var _mass: Vector3 = Vector3.ZERO
+var _mass_vel: Vector3 = Vector3.ZERO
+var _blade_angle: float = 0.0
+var _blade_angle_vel: float = 0.0
+var _blade_len: float = 0.0
+var _blade_len_vel: float = 0.0
+var _blade_base: Vector3 = Vector3.FORWARD
+var _blade_axis: Vector3 = Vector3.UP
+var _flow_align: float = 0.0
+var _flow_advect: float = 0.0
+var _flow_dir: Vector3 = Vector3.RIGHT
+var _core: MeshInstance3D = null
+var _core_base: Vector3 = Vector3.ZERO
+var _droplets: CPUParticles3D = null
 
 ## 锁定目标（null = 没锁）
 var _lock_target: Node3D = null
@@ -391,8 +427,6 @@ var _swing_hit_ids: Array[int] = []
 var _pod_capsule: CapsuleShape3D = CapsuleShape3D.new()
 var _pod_query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
 
-@onready var _pod_mesh: MeshInstance3D = $Pseudopod
-@onready var _bulge_mesh: MeshInstance3D = $Bulge
 @onready var _aim_marker: MeshInstance3D = $AimMarker
 @onready var _facing_pivot: Node3D = $Facing
 @onready var _swing_preview: MeshInstance3D = $SwingPreview
@@ -482,7 +516,7 @@ func _physics_process(delta: float) -> void:
     _try_start_dodge()
     _update_pseudopod(delta)
     _update_movement(delta)
-    _update_body_deform(delta)
+    _update_cell_motion(delta)
     _update_visuals()
 
 
@@ -806,32 +840,137 @@ func _end_combo() -> void:
     _combo_index = 0
 
 
-# ---------------------------------------------------------------- 本体形变
+# ---------------------------------------------------------------- 全细胞动作
 
-## 出手时整个细胞朝出手方向抻长、背面凹进去，收回时弹回来（弹簧，阻尼不大，所以会回弹一下）。
-## 本体跟着变，它就是一个生物；本体不动，它就是装了零件的球
-func _update_body_deform(delta: float) -> void:
-    var goal: float = 0.0
-    var strength: float = body_stretch_heavy if _attack_is_heavy else body_stretch_light
+## 蓄 → 发 → 过冲 → 沉，全部来自弹簧：
+##   蓄：前摇时整团质量的目标点在出手方向的反面 → 背面鼓、前面瘪、核往后挪
+##   发：刃的方向、长度追判定，追得慢 → 尾部被甩在后面而弯；整团质量跟着往前冲；胞质顺挥击方向流
+##   过冲：判定停了，刃的方向弹簧还带着速度 → 冲过头再被拽回来
+##   沉：刃收回后质量弹簧和胞质流动还在晃，慢慢散掉
+func _update_cell_motion(delta: float) -> void:
+    var mass_goal: Vector3 = Vector3.ZERO
+    var len_goal: float = 0.0
+    var attacking: bool = false
     match _pod_state:
         PodState.WINDUP:
-            strength = body_stretch_heavy if _windup_is_heavy else body_stretch_light
-            goal = strength * _windup_progress() * 0.6
-            _stretch_dir = _aim_dir
-        PodState.EXTENDING, PodState.SWEEPING, PodState.HOLDING:
-            goal = strength
-            _stretch_dir = _pod_dir()
-        PodState.RETRACTING:
-            # 收回 = 物质流回身体，抻长随伪足长度一起退
-            goal = strength * clampf(_pod_length / maxf(_target_length, 0.001), 0.0, 1.0)
-            _stretch_dir = _pod_dir()
-    var accel: float = (goal - _stretch) * body_stretch_stiffness - _stretch_vel * body_stretch_damping
-    _stretch_vel += accel * delta
-    _stretch += _stretch_vel * delta
+            var axis: Vector3 = _swing_axis_for(_aim_dir)
+            var start_dir: Vector3 = _aim_dir.rotated(axis, _swing_half_arc(_windup_is_heavy) * _swing_side)
+            var squash: float = mass_squash_heavy if _windup_is_heavy else mass_squash_light
+            mass_goal = -start_dir * squash * _windup_progress()
+        PodState.EXTENDING, PodState.SWEEPING, PodState.HOLDING, PodState.RETRACTING:
+            attacking = true
+            len_goal = _pod_length
+    if attacking:
+        var ang_goal: float = lerpf(_swing_start, _swing_end, _swing_t)
+        var acc: float = (ang_goal - _blade_angle) * blade_angle_stiffness - _blade_angle_vel * blade_angle_damping
+        _blade_angle_vel += acc * delta
+        _blade_angle += _blade_angle_vel * delta
+        var follow: float = mass_follow_heavy if _attack_is_heavy else mass_follow_light
+        mass_goal = _blade_dir() * follow * clampf(_blade_len / maxf(_target_length, 0.001), 0.0, 1.0)
+    var len_acc: float = (len_goal - _blade_len) * blade_length_stiffness - _blade_len_vel * blade_length_damping
+    _blade_len_vel += len_acc * delta
+    _blade_len = maxf(_blade_len + _blade_len_vel * delta, 0.0)
+    if _blade_len <= 0.0 and _blade_len_vel < 0.0:
+        # 收到底的那股冲劲交给整团质量：刃不是消失，是流回身体里晃一下
+        _mass_vel += _blade_dir() * _blade_len_vel * 0.15
+        _blade_len_vel = 0.0
+    var m_acc: Vector3 = (mass_goal - _mass) * mass_stiffness - _mass_vel * mass_damping
+    _mass_vel += m_acc * delta
+    _mass += _mass_vel * delta
+
+    # 胞质流动：挥动时顺挥击方向对齐，之后慢慢散回乱流
+    var speed: float = absf(_blade_angle_vel)
+    if _pod_state == PodState.SWEEPING and _blade_len > 0.05:
+        _flow_align = 1.0
+        _flow_dir = (_blade_axis.cross(_blade_dir()) * signf(_blade_angle_vel + 0.0001)).normalized()
+    else:
+        _flow_align *= exp(-flow_align_decay * delta)
+    _flow_advect += _flow_align * flow_advect_speed * delta
+
+    var bend: float = -_blade_angle_vel * blade_bend_per_speed - signf(_swing_end - _swing_start) * blade_rest_curve
+    bend = clampf(bend, -blade_bend_max, blade_bend_max)
     if _body_material != null:
         # Player 自身不旋转，身体网格的模型空间就是世界朝向
-        _body_material.set_shader_parameter(&"stretch_dir", _stretch_dir.normalized())
-        _body_material.set_shader_parameter(&"stretch_amount", maxf(_stretch, -0.1))
+        var m_len: float = _mass.length()
+        _body_material.set_shader_parameter(&"stretch_dir", _mass / m_len if m_len > 0.0001 else Vector3.FORWARD)
+        _body_material.set_shader_parameter(&"stretch_amount", m_len)
+        _body_material.set_shader_parameter(&"pod_dir", _blade_dir())
+        _body_material.set_shader_parameter(&"pod_len", _blade_len)
+        _body_material.set_shader_parameter(&"pod_axis", _blade_axis)
+        _body_material.set_shader_parameter(&"pod_bend", bend)
+        _body_material.set_shader_parameter(&"pod_root_cos", cos(deg_to_rad(blade_root_deg)))
+        _body_material.set_shader_parameter(&"pod_thin", blade_thin)
+        _body_material.set_shader_parameter(&"pod_flat", blade_flat)
+        _body_material.set_shader_parameter(&"pod_profile", blade_profile)
+        _body_material.set_shader_parameter(&"flow_dir", _flow_dir)
+        _body_material.set_shader_parameter(&"flow_align", _flow_align)
+        _body_material.set_shader_parameter(&"flow_advect", _flow_advect)
+    if _core != null:
+        _core.position = _core_base + _mass * body_radius * core_follow
+
+    # 刃尖甩出的小液滴：只在甩得快的时候出，方向是刃尖的运动方向，散得很开
+    if _droplets != null:
+        var fast: bool = attacking and _blade_len > 0.4 and speed > 4.0
+        _droplets.emitting = droplets_enabled and fast
+        if fast:
+            var tip: Vector3 = (_blade_dir() * (body_radius + _blade_len)).rotated(_blade_axis, bend)
+            _droplets.global_position = global_position + tip
+            _droplets.direction = _flow_dir
+            _droplets.initial_velocity_max = 2.0 + speed * 0.25
+
+
+## 画面上的刃当前指向（追判定的弹簧，不是判定本身）
+func _blade_dir() -> Vector3:
+    return _blade_base.rotated(_blade_axis, _blade_angle)
+
+
+## 出手那一刻：刃从"判定起点再往后拉一点"开始追
+func _reset_blade_for_swing() -> void:
+    _blade_base = _attack_dir
+    _blade_axis = _swing_axis
+    _blade_angle = _swing_start + deg_to_rad(blade_wind_back_deg) * signf(_swing_start)
+    _blade_angle_vel = 0.0
+
+
+func _create_droplets() -> void:
+    _droplets = CPUParticles3D.new()
+    _droplets.name = "SwingDroplets"
+    var drop := SphereMesh.new()
+    drop.radius = 0.045
+    drop.height = 0.09
+    drop.radial_segments = 8
+    drop.rings = 4
+    var m := StandardMaterial3D.new()
+    m.albedo_color = Color(look.membrane_color.lightened(0.3), 0.85)
+    m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+    m.emission_enabled = true
+    m.emission = look.rim_color * 0.4
+    drop.material = m
+    _droplets.mesh = drop
+    _droplets.amount = droplet_amount
+    _droplets.lifetime = 0.45
+    _droplets.lifetime_randomness = 0.7
+    _droplets.local_coords = false
+    _droplets.emitting = false
+    _droplets.randomness = 1.0
+    _droplets.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+    _droplets.emission_sphere_radius = 0.15
+    _droplets.spread = 55.0
+    _droplets.initial_velocity_min = 1.0
+    _droplets.initial_velocity_max = 5.0
+    _droplets.gravity = Vector3(0.0, -1.5, 0.0)
+    _droplets.damping_min = 2.0
+    _droplets.damping_max = 6.0
+    # 大小差得开：有大滴有碎沫，不要整齐划一
+    _droplets.scale_amount_min = 0.25
+    _droplets.scale_amount_max = 1.6
+    var shrink := Curve.new()
+    shrink.add_point(Vector2(0.0, 1.0))
+    shrink.add_point(Vector2(1.0, 0.0))
+    _droplets.scale_amount_curve = shrink
+    _droplets.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+    add_child(_droplets)
+    _droplets.top_level = true
 
 
 # ---------------------------------------------------------------- 锁定
@@ -976,6 +1115,7 @@ func _launch_attack(heavy: bool, direction: Vector3, kind: String) -> void:
     _swing_duration = heavy_swing_time if heavy else light_swing_time
     _swing_t = 0.0
     _swing_hit_ids.clear()
+    _reset_blade_for_swing()
     if swing_alternate:
         _swing_side = -_swing_side
     attack_launched.emit(kind)
@@ -1065,18 +1205,13 @@ func _apply_look() -> void:
     _body_material = look.make_membrane_material()
     _body_mesh.material_override = _body_material
     _body_base_color = look.membrane_color
-    _pod_material = look.make_membrane_material()
-    _pod_mesh.material_override = _pod_material
-    # 伪足：根部宽（和身体连成一片）、往外收细到刃口，不是等粗的圆柱。
-    # 网格沿 Y 轴、底面在身体中心，所以底面半径就是"根部"
-    var taper := CylinderMesh.new()
-    taper.bottom_radius = body_radius * pod_root_ratio
-    taper.top_radius = pod_tip_radius_visual
-    taper.height = 1.0
-    taper.radial_segments = 16
-    taper.rings = 6
-    _pod_mesh.mesh = taper
-    _bulge_mesh.material_override = look.make_membrane_material()
+    # 刃是身体的膜拉出来的，需要足够细的网格才拉得出平滑的长条
+    var fine := SphereMesh.new()
+    fine.radius = body_radius
+    fine.height = body_radius * 2.0
+    fine.radial_segments = 96
+    fine.rings = 64
+    _body_mesh.mesh = fine
     var core_mesh := SphereMesh.new()
     core_mesh.radius = body_radius * look.core_scale
     core_mesh.height = body_radius * look.core_scale * 2.0
@@ -1086,6 +1221,9 @@ func _apply_look() -> void:
     core.mesh = core_mesh
     core.position = look.core_offset * body_radius * 2.0
     _body_mesh.add_child(core)
+    _core = core
+    _core_base = core.position
+    _create_droplets()
 
 
 ## 五档里没在检查器里配的，填上默认值。轻击压在最低档；受击比以前（定格 0.06、抖 0.6）往上调了一点
@@ -1507,40 +1645,12 @@ func _update_visuals() -> void:
 
     var winding_up: bool = _pod_state == PodState.WINDUP
 
-    # 前摇的可读性靠剪影：膜朝伪足将要伸出的方向鼓起、越聚越长（物质往伪足里流、聚合成刃）。
-    # 鼓在挥扫起点那一侧，顺便预告这一下从哪边扫过来。轻击的前摇很短，鼓包也小
-    _bulge_mesh.visible = winding_up
-    if _bulge_mesh.visible:
-        var c: float = _windup_progress()
-        var size: float = 1.0 if _windup_is_heavy else 0.6
-        var bulge_dir: Vector3 = _aim_dir.rotated(_swing_axis_for(_aim_dir), _swing_half_arc(_windup_is_heavy) * _swing_side)
-        var width: float = lerpf(0.35, 0.6, c) * size
-        var length: float = lerpf(0.4, bulge_max_stretch, c) * size
-        _bulge_mesh.transform = Transform3D(
-            _basis_y_to(bulge_dir) * Basis.from_scale(Vector3(width, length, width)),
-            bulge_dir * (body_radius * 0.6 + length * 0.25)
-        )
-
     _swing_preview.visible = show_reach_preview and winding_up and _windup_is_heavy
     if _swing_preview.visible:
         _draw_swing_preview(heavy_reach * _windup_progress(), _swing_half_arc(true))
 
-    _pod_mesh.visible = not idle_or_windup and _pod_length > 0.0
-    if _pod_mesh.visible:
-        # 伪足从细胞中心长出，总长 = 半径 + 伸出长度；重击的刃更长更细
-        var total: float = body_radius + _pod_length
-        var thickness: float = lerpf(1.0, 0.7, _attack_strength)
-        var dir: Vector3 = _pod_dir()
-        _pod_mesh.transform = Transform3D(
-            _basis_y_to(dir) * Basis.from_scale(Vector3(thickness, total, thickness)),
-            dir * total * 0.5
-        )
-        # 伪足聚合成刃：伸出、挥、停留时是硬的（不起伏、不透明、高光锐），收回时随长度软回去（解聚）
-        if _pod_material != null:
-            var hard: float = 1.0
-            if _pod_state == PodState.RETRACTING:
-                hard = clampf(_pod_length / maxf(_target_length, 0.001), 0.0, 1.0)
-            _pod_material.set_shader_parameter(&"hardness", hard)
+    # 朝向小方块只在待机时显示：出手时整团质量的形变已经说明了方向，再挂个方块就是"球 + 挂件"
+    _facing_pivot.visible = _pod_state == PodState.IDLE
 
 
 ## 扇形环带：从膜表面到伪足能伸到的距离，覆盖即将扫过的整个弧
