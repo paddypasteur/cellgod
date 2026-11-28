@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="370" viewBox="0 0 680 370">
+<rect width="680" height="370" fill="#ffffff"/>
+<text x="310" y="32" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">侧面轮廓</text>
+<text x="600" y="32" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">横截面</text>
+<circle cx="132" cy="70" r="20" fill="#888780"/>
+<path d="M150,52 L470,70 L150,88 Z" fill="#888780"/>
+<circle cx="600" cy="70" r="15" fill="#888780"/>
+<text x="36" y="64" font-size="14" fill="#2C2C2A" font-family="sans-serif">现在</text>
+<text x="36" y="82" font-size="12" fill="#5F5E5A" font-family="sans-serif">规则圆锥</text>
+<text x="600" y="104" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">圆</text>
+<circle cx="132" cy="180" r="20" fill="#888780"/>
+<path d="M150,164 C250,140 330,212 470,176 L470,186 C330,224 250,158 150,196 Z" fill="#888780"/>
+<circle cx="600" cy="180" r="15" fill="#888780"/>
+<text x="36" y="174" font-size="14" fill="#2C2C2A" font-family="sans-serif">刚才那版</text>
+<text x="36" y="192" font-size="12" fill="#5F5E5A" font-family="sans-serif">软 = 鞭子</text>
+<text x="600" y="214" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">还是圆</text>
+<circle cx="132" cy="290" r="20" fill="#1D9E75"/>
+<path d="M150,274 L385,271 L470,290 L385,309 L150,306 Z" fill="#1D9E75"/>
+<ellipse cx="600" cy="290" rx="28" ry="6" fill="#1D9E75"/>
+<text x="36" y="284" font-size="14" fill="#2C2C2A" font-family="sans-serif">要的</text>
+<text x="36" y="302" font-size="12" fill="#5F5E5A" font-family="sans-serif">刀</text>
+<text x="600" y="324" font-size="12" fill="#5F5E5A" text-anchor="middle" font-family="sans-serif">透镜形，有刃口</text>
+</svg>
