@@ -1,36 +1,85 @@
 class_name HitTier
 extends Resource
-## 打击感的一档。策划 2026-11-27 定的五档阶梯（轻击 < 重击 < 弹反 < 受击 < Boss/剧情），
-## 每档一组独立参数。核心约束：**普通轻击永远在最低档**——打击感需要动态范围，
-## 普通攻击要是已经做满，后面所有东西都没地方往上走，打两分钟玩家就麻了（开发者原话大意）。
+## 打击感的一档。策划 2026-11-27 定的五档阶梯（轻击 < 重击 < 弹反 < 受击 < Boss/剧情）。
+## 核心约束：**普通轻击永远在最低档**——打击感需要动态范围，普通攻击要是已经做满，后面所有东西都没地方往上走。
+##
+## 2026-11-28 起是"冲击系统"（DESIGN《冲击系统》）：每档只填一个主强度 impact，
+## 定格、镜头抖、后坐、击退、敌人形变、命中粒子全部由它按 ImpactConfig 的曲线算出来。
+## 加新招式 = 建一档 + 填一个数。某一项想单独偏一点（比如定格久但不想击退远），改该项的倍率
 
 ## 档位名，只用于检查器里辨认
 @export var label: String = ""
-## 命中定格（秒，全局冻结）。60 帧下 0.033 ≈ 2 帧
-@export var hitstop: float = 0.04
-## 镜头抖动强度（0..1）。镜头按强度平方换算位移，所以 0.1 以下几乎看不出
-@export_range(0.0, 1.0) var camera_shake: float = 0.05
-## 命中粒子（胞质飞溅）数量。0 = 不出粒子
-@export var particle_amount: int = 5
-## 粒子初速度（米/秒）
-@export var particle_speed: float = 3.0
-## 粒子存活时间（秒）
-@export var particle_lifetime: float = 0.25
-## 粒子直径（米）。镜头离交战点约 7–9 米，太小在 1080p 下只有一两个像素（2026-11-27 截图确认）
-@export var particle_size: float = 0.1
-## 膜口（命中处的环）回缩时长（秒）。0 = 不显示
-@export var membrane_time: float = 0.15
+## 主强度。普通轻击 = 1，重击 = 2.5
+@export_range(0.0, 10.0) var impact: float = 1.0
+
+@export_group("单项倍率（默认 1，只在想让某一项偏离主强度时改）")
+@export var hitstop_mult: float = 1.0
+@export var shake_mult: float = 1.0
+@export var recoil_mult: float = 1.0
+@export var knockback_mult: float = 1.0
+@export var wobble_mult: float = 1.0
+@export var particle_mult: float = 1.0
+
+## 用哪份基准。为空时用全局默认那份
+@export var config: ImpactConfig
 
 
-static func make(p_label: String, p_hitstop: float, p_shake: float, p_amount: int,
-        p_speed: float, p_lifetime: float, p_membrane: float, p_size: float = 0.1) -> HitTier:
+func _cfg() -> ImpactConfig:
+    return config if config != null else ImpactConfig.get_default()
+
+
+## 命中定格（秒）
+func get_hitstop() -> float:
+    var c := _cfg()
+    return ImpactConfig.curve(c.hitstop_base, impact, c.hitstop_exp) * hitstop_mult
+
+
+## 镜头抖（0..1）
+func get_shake() -> float:
+    var c := _cfg()
+    return clampf(ImpactConfig.curve(c.shake_base, impact, c.shake_exp) * shake_mult, 0.0, 1.0)
+
+
+## 后坐（米/秒）
+func get_recoil() -> float:
+    var c := _cfg()
+    return ImpactConfig.curve(c.recoil_base, impact, c.recoil_exp) * recoil_mult
+
+
+## 击退（米/秒）
+func get_knockback() -> float:
+    var c := _cfg()
+    return ImpactConfig.curve(c.knockback_base, impact, c.knockback_exp) * knockback_mult
+
+
+## 受击形变倍率（乘到 HitWobble 的弯曲和凹陷上）
+func get_wobble() -> float:
+    var c := _cfg()
+    return ImpactConfig.curve(c.wobble_base, impact, c.wobble_exp) * wobble_mult
+
+
+func get_particle_count() -> int:
+    var c := _cfg()
+    return roundi(ImpactConfig.curve(c.particle_count_base, impact, c.particle_count_exp) * particle_mult)
+
+
+func get_particle_speed() -> float:
+    var c := _cfg()
+    return ImpactConfig.curve(c.particle_speed_base, impact, c.particle_speed_exp)
+
+
+func get_particle_size() -> float:
+    var c := _cfg()
+    return ImpactConfig.curve(c.particle_size_base, impact, c.particle_size_exp)
+
+
+func get_particle_life() -> float:
+    var c := _cfg()
+    return ImpactConfig.curve(c.particle_life_base, impact, c.particle_life_exp)
+
+
+static func make(p_label: String, p_impact: float) -> HitTier:
     var t := HitTier.new()
-    t.particle_size = p_size
     t.label = p_label
-    t.hitstop = p_hitstop
-    t.camera_shake = p_shake
-    t.particle_amount = p_amount
-    t.particle_speed = p_speed
-    t.particle_lifetime = p_lifetime
-    t.membrane_time = p_membrane
+    t.impact = p_impact
     return t

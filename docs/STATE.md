@@ -3,7 +3,21 @@
 > **所有者：开发 Claude。** 策划 Claude 只读，也可以直接读仓库代码；有出入时以代码为准。
 > 最后更新：2026-11-28
 
-## 最近一次改动（2026-11-28 第八批：刃有白边、前缘硬后缘软、刀变细、一刀之内加缓冲）
+## 最近一次改动（2026-11-28 第九批：冲击系统、命中粒子重做、受击愣住）
+
+按策划 2026-11-28《把冲击做成系统、粒子改方向+指数减速、受击要打断朝向》做的。
+
+- **冲击系统**（`scripts/fx/impact_config.gd` + `scripts/fx/hit_tier.gd`）：每档 HitTier 只填一个主强度 `impact`（轻 1 / 重 2.5 / 弹反 3.5 / 受击 2 / Boss 5），
+  定格、镜头抖、后坐、击退、敌人形变、命中粒子（数量/初速/大小/存活）全部 = 基准 × impact^指数 × 该档单项倍率（默认 1）。
+  基准和指数在 ImpactConfig（Player 的 `impact_config`，为空用全局默认）。指数按换系统前的轻/重两档实际值反推，所以定格、镜头抖手感不变；
+  **后坐、击退的基准整体上调 1.5 倍**（轻击后坐 2→3、重击 5→7.5；轻击击退 3→4.5、重击 10→14.8）。
+  Player 的 recoil_light/heavy、Enemy 的 knockback_light/heavy 已删；受击档用 `shake_mult = 3.45` 保住原来的 0.7 抖动
+- **命中粒子重做**（`scripts/fx/hit_fx.gd`）：环删了。胞质沿冲击方向（刃的运动方向）从目标另一侧迸出，指数减速（体液黏滞）后停住、慢慢漂、淡出。
+  大小 ±20%、速度 ±30%、朝向随机。自己推进，命中定格时停住
+- **受击愣住**：敌人挨打后 0.6 秒保持挨打那一刻的朝向（`hit_facing_hold_time`），之后慢慢转回来（不一帧扭回）。没动 AI
+- 测试：`hit_wobble_smoke` 扩到 16 项（冲击系统 4 项、愣住 2 项）；`hit_wobble_strip` 加了命中粒子
+
+## 上一批改动（2026-11-28 第八批：刃有白边、前缘硬后缘软、刀变细、一刀之内加缓冲）
 
 按策划 2026-11-28《软硬分在宽度上、刀变细 + 挥击平面倾斜、刃要用膜的材质》做的。
 
@@ -350,7 +364,7 @@ HUD 视野外指示器、鼠标转镜头、ATP、质量系统、玩家死亡流�
 | `scripts/arena/training_dummy.gd` | 靶子 |
 | `scripts/autoload/hit_stop.gd` | 全局命中定格 |
 | `scripts/autoload/sfx.gd` | 代码合成的占位音效 |
-| `scripts/fx/hit_tier.gd` / `scripts/fx/hit_fx.gd` | 打击档位参数 / 命中特效 |
+| `scripts/fx/impact_config.gd` / `hit_tier.gd` / `hit_fx.gd` | 冲击系统基准 / 打击档位（主强度）/ 命中特效 |
 | `scripts/fx/hit_wobble.gd` | 受击形变"先脆后晃"（通用，挂在敌人上） |
 | `shaders/cell_membrane.gdshader` / `scripts/fx/cell_look.gd` | 细胞膜着色器 / 细胞观感参数（免疫族、细菌族） |
 | `scripts/debug/playtest_logger.gd` | 试玩记录器（arena.tscn 里的 PlaytestLogger 节点） |

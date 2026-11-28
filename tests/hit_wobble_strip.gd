@@ -1,12 +1,13 @@
 extends SceneTree
-## 受击形变逐帧剪影：只放一只敌人，从正上方看，挨一下重击（从侧面横着打中腰）后每 3 帧拍一张，共 16 张。
+## 受击形变逐帧剪影：只放一只敌人，从正上方看，挨一下重击（从侧面横着打中腰）后每 5 帧拍一张，共 16 张。
+## 命中粒子也一起拍（从另一侧迸出、减速、漂浮、淡出）
 ## 用来自查"先脆后晃"：第 0 帧（定格中）应该和挨打前一样；之后弓起、回弹两三次、停下。
 ## 用法（窗口模式）：
 ##   godot --path . --resolution 400x400 -s tests/hit_wobble_strip.gd -- --out=输出目录
 ##   python tests/silhouette_strip.py 输出目录 --rows=wobble
 
 const FRAMES: int = 16
-const STEP: int = 3
+const STEP: int = 5
 
 var _out_dir: String = ""
 var _vp: SubViewport
@@ -28,7 +29,7 @@ func _initialize() -> void:
     root.add_child(_vp)
     var cam := Camera3D.new()
     cam.projection = Camera3D.PROJECTION_ORTHOGONAL
-    cam.size = 4.0
+    cam.size = 6.0
     # 场景树还没开始跑，look_at 用不了，直接给朝下看的朝向（屏幕上方 = -Z）
     cam.transform = Transform3D(Basis(Vector3.RIGHT, -PI * 0.5), Vector3(0.0, 10.0, 0.0))
     _vp.add_child(cam)
@@ -42,7 +43,11 @@ func _physics_process(_delta: float) -> bool:
     _enemy.global_position = Vector3.ZERO
     if _frame == _hit_frame:
         # 从 +X 一侧打中腰部，冲击朝 -X（刃横扫过去的方向）
-        _enemy.take_hit(1.0, Vector3.LEFT, Vector3(0.45, 0.0, 0.0), Vector3.LEFT)
+        var heavy := HitTier.make("重击", 2.5)
+        _enemy.take_hit(1.0, Vector3.LEFT, Vector3(0.45, 0.0, 0.0), Vector3.LEFT, heavy.get_knockback(), heavy.get_wobble())
+        _enemy.velocity = Vector3.ZERO
+        # 命中粒子：从被打穿的另一侧（-X）沿冲击方向迸出
+        HitFx.spawn(_vp, Vector3(-0.45, 0.0, 0.0), Vector3.LEFT, Vector3.LEFT, heavy, Color(1.0, 0.97, 0.9), Color(0.45, 0.6, 0.25))
     var k: int = _frame - _hit_frame
     if k >= -STEP and k % STEP == 0 and k / STEP < FRAMES:
         var idx: int = k / STEP + 1

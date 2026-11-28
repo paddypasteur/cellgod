@@ -112,10 +112,10 @@ func _physics_process(_delta: float) -> bool:
         _enemy.set_physics_process(false)
         _check("弹射默认关闭", not _p.ability_chain_launch)
         _check("受击档位比以前重（定格 >0.06，抖 >0.6）",
-            _p.tier_player_hurt.hitstop > 0.06 and _p.tier_player_hurt.camera_shake > 0.6,
-            "定格 %.2f 抖 %.2f" % [_p.tier_player_hurt.hitstop, _p.tier_player_hurt.camera_shake])
+            _p.tier_player_hurt.get_hitstop() > 0.06 and _p.tier_player_hurt.get_shake() > 0.6,
+            "定格 %.2f 抖 %.2f" % [_p.tier_player_hurt.get_hitstop(), _p.tier_player_hurt.get_shake()])
         _check("轻击档位在最低（定格、抖动都低于重击）",
-            _p.tier_light_hit.hitstop < _p.tier_heavy_hit.hitstop and _p.tier_light_hit.camera_shake < _p.tier_heavy_hit.camera_shake)
+            _p.tier_light_hit.get_hitstop() < _p.tier_heavy_hit.get_hitstop() and _p.tier_light_hit.get_shake() < _p.tier_heavy_hit.get_shake())
     if _frame < 60:
         return false
 

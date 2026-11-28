@@ -13,11 +13,9 @@ extends Resource
 @export var dent_depth: float = 0.25
 @export var dent_radius: float = 0.4
 @export var dent_recover_time: float = 0.12
-## 弯：接触点被推开多少米（重击满值）；推力沿身体衰减的距离（米）——越小两端越跟不上、弓得越明显
+## 弯：接触点被推开多少米（形变倍率 = 1 时，约等于重击）；推力沿身体衰减的距离（米）——越小两端越跟不上、弓得越明显
 @export var bend_amount: float = 0.6
 @export var bend_falloff: float = 0.6
-## 轻击的形变是重击的多少
-@export_range(0.0, 1.0) var light_scale: float = 0.6
 ## 回弹：频率（每秒来回几次）、阻尼比。阻尼比 0.3 ≈ 看得见的回弹两三次（每次约剩上一次的 37%）；
 ## 0.22 时实测看得见的有 4 次，再小就是果冻娃娃
 @export var bounce_hz: float = 3.0
@@ -33,15 +31,16 @@ var _dent_t: float = -1.0
 var _dent_amp: float = 0.0
 
 
-## 记一次命中。world_point = 接触点，world_dir = 冲击方向（刃的运动方向）。
+## 记一次命中。world_point = 接触点，world_dir = 冲击方向（刃的运动方向）；
+## amount = 形变倍率，由冲击系统按这一击的主强度算好（HitTier.get_wobble，轻击约 0.6、重击约 1）。
 ## 这里不改任何形状：定格结束之后 update 才开始动
-func hit(mesh: Node3D, world_point: Vector3, world_dir: Vector3, strength: float) -> void:
+func hit(mesh: Node3D, world_point: Vector3, world_dir: Vector3, amount: float) -> void:
     var xf: Transform3D = mesh.global_transform if mesh.is_inside_tree() else mesh.transform
     var inv: Transform3D = xf.affine_inverse()
     _hit_pos_local = inv * world_point
     _hit_dir_local = (inv.basis * world_dir).normalized()
     _pending = true
-    _pending_amp = lerpf(light_scale, 1.0, clampf(strength, 0.0, 1.0))
+    _pending_amp = maxf(amount, 0.0)
 
 
 ## 每个物理帧调用。frozen = 命中定格中（定格期间不动，保住"脆"）

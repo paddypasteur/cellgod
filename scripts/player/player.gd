@@ -176,9 +176,10 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 ## 提前按下的闪避记住多久（秒）
 @export var dodge_buffer_time: float = 0.15
 
-@export_group("打击感（五档阶梯）")
-## 策划 2026-11-27 的阶梯：轻击 < 重击 < 弹反 < 受击 < Boss/剧情，每档独立参数。
+@export_group("打击感（冲击系统）")
+## 策划 2026-11-27 的阶梯：轻击 < 重击 < 弹反 < 受击 < Boss/剧情。
 ## **普通轻击永远在最低档**，留出往上走的余地（开发者原话大意："特效不要做得太满，时间停止留给技能或受击"）。
+## 2026-11-28 起每档只填一个主强度 impact，定格、镜头抖、后坐、击退、敌人形变、粒子全由它算（DESIGN《冲击系统》）。
 ## 第 3、5 档现在没有东西用，只把位置留出来。为空时 _ready 里填默认值
 @export var tier_light_hit: HitTier
 @export var tier_heavy_hit: HitTier
@@ -187,19 +188,16 @@ enum PodState { IDLE, WINDUP, EXTENDING, SWEEPING, HOLDING, RETRACTING }
 @export var tier_player_hurt: HitTier
 ## 第 5 档：Boss 技能、剧情瞬间（未实现）
 @export var tier_boss: HitTier
-## 命中后坐力：命中时玩家被自己的攻击推着往后退（空洞骑士小骑士那种）。
-## 它传达的是"那东西比我重"——全队最小最弱的那个。初速度（米/秒）：轻击 / 重击
-@export var recoil_light: float = 2.0
-@export var recoil_heavy: float = 5.0
+## 冲击系统的基准（各通道的基准值和增长曲线）。为空时用全局默认那份
+@export var impact_config: ImpactConfig
+## 命中后坐：命中时玩家被自己的攻击推着往后退（空洞骑士小骑士那种），传达"那东西比我重"。
+## 大小由档位的主强度决定（ImpactConfig 的后坐那组）；这里只留一个成长用的总系数。
 ## 后坐力总体缩放。**后坐力是会成长的**：序章每砍一下都被推退半步，第一章改造后同样的攻击站得住。
 ## 现在不实现成长，只留这个系数（默认 1）
 @export var recoil_scale: float = 1.0
 ## 后坐期间不吃移动输入的时间（秒），之后后退的速度很快衰减掉
 @export var recoil_control_time: float = 0.1
-## 胞质飞溅方向 = "朝攻击者"（从目标往玩家）× 权重 + "逆着刃的运动方向" × 权重。
-## 开发者要的是"朝挥击的反方向迸溅"，两种理解都保留成参数
-@export var spray_toward_attacker_weight: float = 1.0
-@export var spray_against_slash_weight: float = 0.6
+## 命中粒子沿冲击方向（刃的运动方向）从目标的另一侧迸出（开发者 2026-11-28："穿过去从另一侧迸出"）。
 ## 胞质 / 膜的颜色（白盒纯色）。胞质用乳白：淡黄会和准星、目标标记的黄色撞色（截图确认）
 @export var fx_cytoplasm_color: Color = Color(1.0, 0.97, 0.9)
 @export var fx_membrane_color: Color = Color(0.45, 0.6, 0.25)
@@ -1298,49 +1296,44 @@ func _deal_hit(target: Object, direction: Vector3) -> void:
         return
     if target.has_method(&"take_hit"):
         # 接触点 + 冲击方向（刃的运动方向）给目标做"先脆后晃"的受击形变
+        # 击退和形变幅度也来自同一个主强度
         var impulse: Vector3 = _swing_axis.cross(_pod_dir()).normalized() * signf(_swing_end - _swing_start)
-        target.call(&"take_hit", _attack_strength, direction, _last_contact, impulse)
+        var t: HitTier = _current_tier()
+        target.call(&"take_hit", _attack_strength, direction, _last_contact, impulse, t.get_knockback(), t.get_wobble())
     if target is Node:
         hit_landed.emit(target, _attack_strength)
     var first_hit_of_attack: bool = not _attack_hit_any
     _on_chain_hit(target)
     # 打击档位：轻击永远是第 1 档（最低），重击第 2 档
-    var tier: HitTier = tier_heavy_hit if _attack_is_heavy else tier_light_hit
+    var tier: HitTier = _current_tier()
     _play_sfx(&"hit_crisp", 0.8 if _attack_is_heavy else 1.15)
     var cam := get_viewport().get_camera_3d() as FollowCamera
     if cam != null:
-        cam.add_shake(tier.camera_shake)
+        cam.add_shake(tier.get_shake())
     _spawn_hit_fx(target as Node3D, tier)
     # 后坐力：被自己的攻击推着往后退。一击只推一次，一刀扫中多个时不重复推；弹射途中不推
     if first_hit_of_attack and not _bouncing:
-        var push: float = (recoil_heavy if _attack_is_heavy else recoil_light) * recoil_scale
+        var push: float = tier.get_recoil() * recoil_scale
         velocity = -_attack_dir * push
         _recoil_timer = recoil_control_time
     # 按路径取 autoload 而不是直接写 HitStop：单脚本语法检查不加载 autoload，
     # 直接引用会让 --check-only 报"找不到标识符"
     var hit_stop: Node = get_node_or_null(^"/root/HitStop")
     if hit_stop != null:
-        hit_stop.call(&"trigger", tier.hitstop)
+        hit_stop.call(&"trigger", tier.get_hitstop())
 
 
-## 命中特效放在目标表面朝玩家的那一点；切口沿刃的运动方向，胞质往"朝攻击者 + 逆着刃"的方向喷
+## 命中特效：切口沿刃的运动方向；胞质沿冲击方向（也是刃的运动方向）从目标的另一侧迸出
 func _spawn_hit_fx(target: Node3D, tier: HitTier) -> void:
     if target == null or tier == null:
         return
-    var to_player: Vector3 = global_position - target.global_position
-    if to_player.length_squared() < 0.0001:
-        to_player = -_attack_dir
-    to_player = to_player.normalized()
     var target_radius: Variant = target.get("body_radius")
     var radius: float = float(target_radius) if target_radius != null else 0.6
-    var hit_point: Vector3 = target.global_position + to_player * radius
     # 绕轴转动的点的速度方向 = 轴 × 半径方向；挥扫角度在减小时方向反过来
     var slash: Vector3 = _swing_axis.cross(_pod_dir()).normalized() * signf(_swing_end - _swing_start)
-    var spray: Vector3 = to_player * spray_toward_attacker_weight - slash * spray_against_slash_weight
-    if spray.length_squared() < 0.0001:
-        spray = to_player
+    var exit_point: Vector3 = target.global_position + slash * radius
     var parent: Node = get_tree().current_scene if get_tree().current_scene != null else get_parent()
-    HitFx.spawn(parent, hit_point, spray, slash, tier, fx_cytoplasm_color, fx_membrane_color)
+    HitFx.spawn(parent, exit_point, slash, slash, tier, fx_cytoplasm_color, fx_membrane_color)
 
 
 ## 把观感资源套到身体、伪足、鼓包上，并在身体里放一个实核。
@@ -1375,15 +1368,27 @@ func _apply_look() -> void:
 ## 五档里没在检查器里配的，填上默认值。轻击压在最低档；受击比以前（定格 0.06、抖 0.6）往上调了一点
 func _ensure_tiers() -> void:
     if tier_light_hit == null:
-        tier_light_hit = HitTier.make("1 轻击命中", 0.04, 0.06, 5, 3.0, 0.25, 0.12, 0.1)
+        tier_light_hit = HitTier.make("1 轻击命中", 1.0)
     if tier_heavy_hit == null:
-        tier_heavy_hit = HitTier.make("2 重击命中", 0.12, 0.3, 12, 5.0, 0.4, 0.2, 0.16)
+        tier_heavy_hit = HitTier.make("2 重击命中", 2.5)
     if tier_parry == null:
-        tier_parry = HitTier.make("3 弹反（未实现）", 0.18, 0.5, 20, 6.0, 0.5, 0.25, 0.18)
+        tier_parry = HitTier.make("3 弹反（未实现）", 3.5)
     if tier_player_hurt == null:
-        tier_player_hurt = HitTier.make("4 玩家受击", 0.09, 0.7, 0, 0.0, 0.0, 0.0)
+        # 受击：定格按主强度走（2.0 ≈ 0.09 秒），镜头要抖得比定格"重"得多（0.7），这正是单项倍率的用处；不出命中粒子
+        tier_player_hurt = HitTier.make("4 玩家受击", 2.0)
+        tier_player_hurt.shake_mult = 3.45
+        tier_player_hurt.particle_mult = 0.0
     if tier_boss == null:
-        tier_boss = HitTier.make("5 Boss / 剧情（未实现）", 0.25, 0.9, 30, 7.0, 0.6, 0.3, 0.2)
+        tier_boss = HitTier.make("5 Boss / 剧情（未实现）", 5.0)
+    if impact_config != null:
+        for t: HitTier in [tier_light_hit, tier_heavy_hit, tier_parry, tier_player_hurt, tier_boss]:
+            if t.config == null:
+                t.config = impact_config
+
+
+## 这一击用哪一档
+func _current_tier() -> HitTier:
+    return tier_heavy_hit if _attack_is_heavy else tier_light_hit
 
 
 # ---------------------------------------------------------------- 挥扫
@@ -1731,10 +1736,10 @@ func take_damage(amount: float, knockback: Vector3) -> bool:
 
     var cam := get_viewport().get_camera_3d() as FollowCamera
     if cam != null:
-        cam.add_shake(tier_player_hurt.camera_shake)
+        cam.add_shake(tier_player_hurt.get_shake())
     var hit_stop: Node = get_node_or_null(^"/root/HitStop")
     if hit_stop != null:
-        hit_stop.call(&"trigger", tier_player_hurt.hitstop)
+        hit_stop.call(&"trigger", tier_player_hurt.get_hitstop())
 
     if health <= 0.0:
         health = max_health

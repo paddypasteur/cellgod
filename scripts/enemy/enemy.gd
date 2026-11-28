@@ -19,9 +19,6 @@ const STATE_LABELS: PackedStringArray = ["接近", "前摇", "攻击", "硬直",
 ## 玩家轻点/蓄满命中时扣多少血
 @export var damage_from_light: float = 8.0
 @export var damage_from_heavy: float = 25.0
-## 被击退的初速度（米/秒），按玩家蓄力插值
-@export var knockback_light: float = 3.0
-@export var knockback_heavy: float = 10.0
 ## 受击硬直时长（秒）
 @export var hitstun_time: float = 0.35
 ## 前摇中被打会不会被打断。关掉 = 前摇有霸体，玩家必须躲
@@ -73,6 +70,10 @@ const STATE_LABELS: PackedStringArray = ["接近", "前摇", "攻击", "硬直",
 @export var look: CellLook
 ## 受击形变"先脆后晃"（通用组件，每只敌人一份）。为空时用默认值
 @export var hit_wobble: HitWobble
+## 挨打后多久（秒）不再转向玩家：被砍的那一下愣住，形变晃完才回过神来。和受击形变的时长差不多
+@export var hit_facing_hold_time: float = 0.6
+## 愣完之后转回来的速度（越大越快）
+@export var hit_facing_recover_rate: float = 8.0
 ## 前摇结束时膨胀到多大
 @export var windup_swell: float = 1.35
 ## 前摇结束时边缘高光增强到几倍：膨胀 + 变色 + 发亮，起手一眼可读
@@ -115,6 +116,10 @@ var _material: ShaderMaterial = null
 @onready var _visual: Node3D = $Visual
 @onready var _mesh: MeshInstance3D = $Visual/Mesh
 var _anim_time: float = 0.0
+var _facing_hold_timer: float = 0.0
+var _facing_recovering: bool = false
+var _held_facing: Vector3 = Vector3.FORWARD
+var _current_facing: Vector3 = Vector3.FORWARD
 @onready var _label: Label3D = $StateLabel
 @onready var _collision: CollisionShape3D = $CollisionShape3D
 
@@ -308,13 +313,24 @@ func _apply_arena_bounds() -> void:
 
 
 ## 玩家伪足命中时调用（和靶子同一个接口）
-## contact = 接触点（世界坐标），impulse = 冲击方向（刃的运动方向）；不给时按 direction 从正面打
-func take_hit(strength: float, direction: Vector3, contact: Vector3 = Vector3.INF, impulse: Vector3 = Vector3.ZERO) -> void:
+## contact = 接触点（世界坐标），impulse = 冲击方向（刃的运动方向）；不给时按 direction 从正面打。
+## knockback（米/秒）和 wobble（形变倍率）由打出这一击的冲击系统算好传进来（DESIGN《冲击系统》），
+## 敌人自己不再各调各的
+func take_hit(strength: float, direction: Vector3, contact: Vector3 = Vector3.INF, impulse: Vector3 = Vector3.ZERO,
+        knockback: float = -1.0, wobble: float = -1.0) -> void:
     if _state == State.DEAD:
         return
     var push: Vector3 = impulse if impulse.length_squared() > 0.0001 else direction
     var point: Vector3 = contact if contact.is_finite() else global_position - direction.normalized()
-    hit_wobble.hit(_mesh, point, push.normalized(), strength)
+    if knockback < 0.0 or wobble < 0.0:
+        # 调用方没给（旧调用）：按力度在轻击 / 重击两档之间取
+        var t := HitTier.make("", lerpf(1.0, 2.5, strength))
+        knockback = t.get_knockback() if knockback < 0.0 else knockback
+        wobble = t.get_wobble() if wobble < 0.0 else wobble
+    hit_wobble.hit(_mesh, point, push.normalized(), wobble)
+    # 受击要打断朝向：被砍的那一刻不再死盯着玩家（2026-11-28 开发者："它的头始终死死地朝着这个细胞，它没有反应的时间"）
+    _facing_hold_timer = hit_facing_hold_time
+    _held_facing = _current_facing
     health -= lerpf(damage_from_light, damage_from_heavy, strength)
     _flash_timer = hurt_flash_time
     if health <= 0.0:
@@ -324,7 +340,8 @@ func take_hit(strength: float, direction: Vector3, contact: Vector3 = Vector3.IN
         return
     if _state == State.ATTACK and not hit_interrupts_attack:
         return
-    velocity = direction.normalized() * lerpf(knockback_light, knockback_heavy, strength)
+    # 击退方向不变（仍是从玩家往外），这一轮只改大小，不动手感以外的变量
+    velocity = direction.normalized() * knockback
     _enter(State.HITSTUN)
 
 
@@ -356,6 +373,18 @@ func _apply_look() -> void:
 
 func _update_visuals() -> void:
     var facing: Vector3 = _attack_dir if _state == State.WINDUP or _state == State.ATTACK else _dir_to_player()
+    var dt: float = get_physics_process_delta_time()
+    if _facing_hold_timer > 0.0:
+        # 愣住：保持挨打那一刻的朝向
+        _facing_hold_timer -= dt
+        facing = _held_facing
+        _facing_recovering = true
+    elif _facing_recovering:
+        # 回过神来：从愣住的朝向慢慢转回去，而不是一帧扭回来
+        facing = _current_facing.slerp(facing.normalized(), 1.0 - exp(-hit_facing_recover_rate * dt))
+        if facing.angle_to(_dir_to_player()) < deg_to_rad(3.0) or _state == State.WINDUP:
+            _facing_recovering = false
+    _current_facing = facing.normalized()
     var scale_factor: float = 1.0
     var color: Color = color_idle
     # 描边档位：普通 / 被准星选中 / 被锁定
